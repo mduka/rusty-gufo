@@ -1,39 +1,44 @@
 # CLI (`src/cli`)
 
-This directory contains the unified `gufo` CLI.
+The `gufo` binary (package `gufo`), its HTTP server (`serve`, package
+`gufo-serve`) and the CLI's own HIP kernels (`kernels`, package
+`gufo-cli-kernels`).
 
 ## Philosophy
 
-1. **One Binary**: All user-facing capabilities (`serve`, `prompt`, `chat`, `bench`, `video`, `diagnose`, `probe`) live under the single `gufo` executable.
-2. **Subcommands Over Flag Soup**: Model-specific or modality-specific options belong under explicit subcommands (e.g. `gufo serve ... llm ...`, `gufo serve ... video ...`), keeping global options clean and self-documenting.
-3. **Declarative Parsing**: Flags and arguments are declared and bound to typed struct fields using `ArgParser` (`src/cli/arg_parser.hpp`). Never parse raw `argv` manually.
-4. **CLI Layer vs Engine Core**: Code in `src/cli/` handles argument parsing, terminal output, and daemon lifecycle. Heavy computational work and kernel dispatches belong in `src/models/` and `src/core/`.
+1. **One Binary**: All user-facing capabilities (`serve`, `arbiter`, `prompt`, `chat`, `bench`, `eval`, `transcribe`, `diagnose`, `probe`) live under the single `gufo` executable.
+2. **Subcommands Over Flag Soup**: Model-specific or modality-specific options belong under explicit subcommands (e.g. `gufo serve ... llm ...`, `gufo serve ... tts ...`), keeping global options clean and self-documenting.
+3. **Declarative Parsing**: Flags and arguments are declared and bound to typed fields with `ArgParser` (`src/arg_parser.rs`). Never parse raw arguments manually.
+4. **CLI Layer vs Engine Core**: The CLI handles argument parsing, terminal output and the server lifecycle. Model computation and kernel dispatch belong in `src/models/` and `src/core/`.
 
-## Directory Organization
-
-Each top-level command has its own dedicated subdirectory:
+## Organization
 
 ```
 src/cli/
-├── main.cpp              # Root dispatcher & global flags (-h, -v, help)
-├── arg_parser.hpp        # Declarative type-safe argument parser
-├── bench/                # `gufo bench` (model throughput & kernel benchmarks)
-├── diagnose/             # `gufo diagnose` & `gufo probe` (hardware inventory & toolchain probe)
-├── prompt/               # `gufo prompt` & `gufo chat` (text generation CLI & REPL)
-├── serve/                # `gufo serve` (HTTP API server: `llm`, `video`, `audio`)
-└── video/                # `gufo video` (MiniMax H3 text-to-video generator CLI)
+├── src/main.rs           # Root dispatcher & global flags (-h, -v, help)
+├── src/arg_parser.rs     # Declarative argument parser
+├── src/arbiter.rs        # `gufo arbiter` (GPU sharing between servers)
+├── src/bench.rs, bench/  # `gufo bench` (model throughput)
+├── src/diagnose/         # `gufo diagnose` & `gufo probe` (hardware inventory & toolchain probe)
+├── src/gpu_queues.rs     # The device-wide hardware compute-queue budget
+├── src/eval.rs           # `gufo eval` (capability evaluation through a server)
+├── src/prompt.rs, prompt/ # `gufo prompt` & `gufo chat` (text generation CLI & REPL)
+├── src/serve.rs          # `gufo serve` startup per modality (`llm`, `tts`, `asr`, `image`)
+├── src/serve_cli.rs      # `gufo serve` options and help
+├── src/transcribe.rs     # `gufo transcribe` (Qwen3-ASR)
+├── serve/                # gufo-serve: HTTP server, APIs, scheduler, caches
+└── kernels/              # gufo-cli-kernels: the CLI's own HIP kernels
 ```
 
 ## Adding a Command or Flag
 
 - **Adding a Flag**:
   - Add a field to the command's options struct.
-  - Bind it in the command's `ArgParser` definition using `parser.AddOption(...)` or `parser.AddFlag(...)`.
-  - **Group Organization**: Place the flag in a logical group (e.g. `Model`, `Sampling`, `Hardware`, `Speculative`, `Diagnostics`). If no existing group fits, create a new meaningful group.
+  - Bind it in the command's `ArgParser` with `add_option`, `add_flag` or `add_custom_option`.
+  - **Group Organization**: Place the flag in a logical group (e.g. `Model`, `Sampling`, `Speculative`, `Diagnostics`). If no existing group fits, create a new meaningful group.
   - **Descriptions**: Keep descriptions concise yet explanatory (include defaults and expected value formats).
-  - **Partial Implementation Notation**: If a flag is not yet supported for all models/backends, annotate the description with `(TODO: <model>)` (e.g., `(TODO: deepseek)` or `(TODO: qwen)`).
+  - **Partial Implementation Notation**: If a flag is not yet supported for all models, annotate the description with `(TODO: <model>)`.
 - **Adding a Command**:
-  1. Create `src/cli/<command>/<command>.hpp` and `<command>.cpp` in `namespace gufo::cli`.
-  2. Implement `Run<Command>(std::span<const char* const> args)`.
-  3. Register the routing in `src/cli/main.cpp`.
-  4. Add the source files to `CMakeLists.txt` under `add_executable(gufo ...)` and write unit tests in `tests/cli/`.
+  1. Create its module under `src/` with a `run(args: &[String]) -> ExitCode`.
+  2. Register the routing and help line in `src/main.rs`.
+  3. Write unit tests beside the code and process-level tests in `tests/`.

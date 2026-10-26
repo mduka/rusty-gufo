@@ -1,6 +1,7 @@
 // Process-local fault injection for device_loss.py. Never resets the GPU.
 // HIP's stable C ABI uses opaque pointers and int error codes; keeping the
-// hooks header-free lets the CPU test preset build this opt-in helper.
+// hooks header-free lets a plain c++ build this opt-in helper without ROCm
+// headers (tests/functional/README.md).
 #include <dlfcn.h>
 #include <sys/socket.h>
 #include <unistd.h>

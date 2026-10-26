@@ -1,4 +1,4 @@
-// Production prefill GEMM ablations. Build inside Nix with
+// Production prefill GEMM ablations. Build with
 // tools/bench/build.sh. Run: prefill_gemm_bench q4|q5|q6|q8|iq4 M K
 // [batch=2048] [iterations=12]
 //      prefill_gemm_bench q8-swiglu [batch=2048] [iterations=12]
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "src/models/qwen/hip/kernels/prefill_quant_gemm.hip"
-#include "tests/models/qwen/hip/support/device_buffer.hpp"
+#include "tools/qwen27b/device_buffer.hpp"
 
 namespace {
 using gufo::test::DeviceBuffer;

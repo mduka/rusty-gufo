@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Measure docs/models/<model>/BENCHMARKS.md tables for Gufo and its reference server.",
     )
     parser.add_argument("--model", required=True, help="docs/models/<model> directory name")
-    parser.add_argument("--gufo", type=Path, default=Path("result/bin/gufo"), help="Gufo binary")
+    parser.add_argument("--gufo", type=Path, default=Path("target/release/gufo"), help="Gufo binary")
     for role in FILE_ROLES:
         parser.add_argument(f"--{role}", action="append", default=[], metavar="[VARIANT=]PATH")
     parser.add_argument("--log-dir", type=Path, default=Path("artifacts/model-bench"),
@@ -113,7 +113,7 @@ def cmd_run(config: BenchConfig, args: argparse.Namespace) -> int:
     root = config.root
     gufo_binary = args.gufo if args.gufo.is_absolute() else (root / args.gufo)
     if not gufo_binary.exists():
-        raise SystemExit(f"Gufo binary not found: {gufo_binary} (run `nix build`)")
+        raise SystemExit(f"Gufo binary not found: {gufo_binary} (run `cargo build --release -p gufo`)")
     reference_binary = args.reference_binary or config.data["reference"]["server"]
     revision, dirty = source_identity(root)
     fingerprint = load_fingerprint(None, gufo_binary)

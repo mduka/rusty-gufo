@@ -4,6 +4,12 @@
 The same BF16 GGUF weights are used on both sides. This validates operator
 execution and binding, not the upstream GGUF conversion or language quantization.
 No model or source download is implicit. Run inside nix develop.
+
+--trace is the OUTPUT_DIR of `qwen27b_vision_test MMPROJ IMAGE OUTPUT_DIR
+OUTPUT_WIDTH` (tests/models/qwen27b/vision_test.cpp), a C++ test of an upstream
+v0.23.0 checkout; no Rust test writes this layout. The Rust encoder matches the
+C++ one stage by stage (src/models/qwen35/tests/vision.rs against dumps of
+src/models/qwen/tests/reference/cpp_vision_dump.cpp).
 """
 from __future__ import annotations
 

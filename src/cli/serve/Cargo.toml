@@ -1,0 +1,26 @@
+[package]
+name = "gufo-serve"
+version = "0.0.0"
+description = "The HTTP server: OpenAI, Anthropic and llama-server APIs, scheduler, runner pool and continuation caches"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The package holds the Rust sources and their tests.
+include = ["Cargo.toml", "src/**/*.rs", "tests/**/*.rs", "examples/*.rs"]
+
+[dependencies]
+chrono.workspace = true
+gufo-core.workspace = true
+rustix.workspace = true
+sha1_smol.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
+toml.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

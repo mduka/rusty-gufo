@@ -85,6 +85,30 @@ void LaunchGPUSampling(const float* logits, std::uint32_t* out_token,
                        GpuSamplingWorkspace* workspace,
                        hipStream_t stream = nullptr);
 
+/// LaunchGPUSampling with the `penalty_count` penalties already in
+/// `workspace->penalties`.
+void LaunchGPUSamplingResident(const float* logits, std::uint32_t* out_token,
+                               std::size_t vocab_size,
+                               const GpuSamplingParameters& parameters,
+                               std::size_t penalty_count,
+                               GpuSamplingWorkspace* workspace,
+                               hipStream_t stream = nullptr);
+
+/// LaunchGPUSpeculativeSampling with the draft candidates already in
+/// `workspace->draft_candidate_ids`/`draft_candidate_probabilities` and the
+/// penalties in `workspace->penalties`.
+void LaunchGPUSpeculativeSamplingResident(
+    const float* logits, std::uint32_t* out_token, std::uint32_t* out_accepted,
+    std::size_t vocab_size, const GpuSamplingParameters& parameters,
+    std::uint32_t draft_token, float draft_token_probability,
+    std::size_t draft_candidate_count, double acceptance_uniform,
+    double residual_uniform, std::size_t penalty_count,
+    GpuSamplingWorkspace* workspace, hipStream_t stream = nullptr);
+
+/// Temporary storage the logit sort over `workspace`'s buffers needs.
+[[nodiscard]] std::size_t GpuSamplingSortStorageBytes(
+    const GpuSamplingWorkspace& workspace);
+
 /// Applies the target sampling policy to one device-resident verification row,
 /// accepts `draft_token` with the lossless speculative ratio, or samples the
 /// residual target-minus-draft distribution after rejection.

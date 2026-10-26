@@ -27,7 +27,7 @@ def check(condition, message):
 
 def make_args(backend):
     return SimpleNamespace(
-        binary="./result/bin/gufo",
+        binary="./target/release/gufo",
         model="/models/target.gguf",
         draft_model="/models/draft.gguf",
         backend=backend,

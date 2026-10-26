@@ -12,7 +12,8 @@ The only production target is Linux x86-64 on AMD Strix Halo:
 
 - `gfx1151` GPU using Wave32 HIP kernels.
 - Unified LPDDR5X shared by CPU and GPU.
-- Nix-provided compilers, libraries, profilers, and test tools.
+- One installed ROCm for compiler, libraries and runtime; profilers and
+  reference tools from `nix develop`.
 
 Runtime probes, not assumed peak specifications, determine the available CUs,
 memory, firmware, and power mode.
@@ -36,7 +37,7 @@ packing, synchronization, or state management erase the gain.
 
 Comparable runs use the same:
 
-- Source revision and Nix build mode.
+- Source revision, Cargo profile and ROCm version.
 - Model revision, artifact, quantization, and KV representation.
 - Prompt tokens, generated-token count, batch, depth, and concurrency.
 - GPU route and dispatch configuration.
@@ -75,7 +76,8 @@ cost in the result.
 
 ### Host runtime
 
-- Use RAII for mappings, streams, events, graphs, contexts, and allocations.
+- Tie mappings, streams, events, graphs, contexts, and allocations to owners
+  that release them on drop.
 - Allocate model, KV, recurrent, graph, and scratch resources before serving.
 - Avoid general heap allocation in decode dispatch.
 - Keep hot scheduler data compact and ownership explicit.
@@ -88,7 +90,7 @@ cost in the result.
 - Compile production kernels for `gfx1151` and treat Wave32 as explicit.
 - Prove alignment before vector loads and provide bounded tail paths.
 - Track VGPR, LDS, occupancy, and scratch for retained kernels.
-  `kernel_resources_test` fails if a kernel uses more scratch than
+  The gate fails if a kernel uses more scratch than
   `tools/ci/kernel-resources.json` allows (see "Kernel resource check").
 - Keep distinct decode and prefill routes where their reuse differs.
 - Read only live KV spans and reuse GQA/MQA K/V across query heads.
@@ -108,12 +110,9 @@ cost in the result.
 
 ### Build and quality gate
 
-Nix must see new files, so stage them before building:
-
 ```sh
-git add <changed-files>
-nix build
-nix build .#checks.x86_64-linux.pr
+cargo build --release -p gufo          # target/release/gufo, outside nix develop
+tools/ci/check-rust.sh                 # the gate; --full for larger steps
 ```
 
 Run focused tests during iteration. Run the full hardware or full-logit suite
@@ -125,20 +124,20 @@ changes.
 ```sh
 MODEL=models/<model>/<artifact>.gguf
 
-./result/bin/gufo bench \
+./target/release/gufo bench \
   --model "$MODEL" \
   --n-prompt 128,512,1024,2048,4096 \
   --n-gen 0 \
   --repetitions 3
 
-./result/bin/gufo bench \
+./target/release/gufo bench \
   --model "$MODEL" \
   --n-prompt 2048 \
   --n-gen 128 \
   --n-depth 4096,8192,12288,16384 \
   --repetitions 1
 
-./result/bin/gufo bench \
+./target/release/gufo bench \
   --model "$MODEL" \
   --validate-prefill 1024 \
   --n-prompt 1024 \
@@ -157,7 +156,7 @@ largest requested concurrency:
 ```sh
 MODEL=models/<model>/<artifact>.gguf
 
-./result/bin/gufo serve \
+./target/release/gufo serve \
   --host 127.0.0.1 \
   --port 8080 \
   --sessions 4 \
@@ -177,7 +176,7 @@ tools/serving/gufo-serving-bench.py \
   --max-tokens 128 \
   --output artifacts/serving/benchmark.json
 
-./result/bin/gufo diagnose \
+./target/release/gufo diagnose \
   --validate-artifact artifacts/serving/benchmark.json
 ```
 
@@ -232,20 +231,21 @@ concurrency decisions.
 
 ### Kernel resource check
 
-The check reads the code objects in a binary. It does not use a GPU. Run it
-after each compiler or ROCm update, and after each kernel change:
+The check reads the code objects in a binary. It does not use a GPU. The gate
+runs it on `target/gpu-test/gufo`; run it by hand after each compiler or ROCm
+update, and after each kernel change:
 
 ```sh
-python3 tools/ci/check-kernel-resources.py result/bin/gufo \
+python3 tools/ci/check-kernel-resources.py target/release/gufo \
   --baseline tools/ci/kernel-resources.json
 ```
 
-To compare two builds, for example two compilers, use `--compare`. It lists
-each kernel that has more scratch, more spilled VGPRs or less VGPR occupancy
-than in the base build:
+To compare two builds, for example two compilers or the C++ build of
+upstream, use `--compare`. It lists each kernel that has more scratch, more
+spilled VGPRs or less VGPR occupancy than in the base build:
 
 ```sh
-python3 tools/ci/check-kernel-resources.py new/bin/gufo --compare old/bin/gufo
+python3 tools/ci/check-kernel-resources.py new/gufo --compare old/gufo
 ```
 
 Change the baseline only after you decide that a new allowance is correct.
@@ -257,7 +257,7 @@ Compare allocation, mapped-registration, first-touch, warm-access, copy,
 advice/prefetch, synchronization, teardown, fault, and checksum behavior:
 
 ```sh
-./result/bin/gufo diagnose \
+./target/release/gufo diagnose \
   --benchmark allocation \
   --working-set-mib 64,1024 \
   --warmup 2 \
@@ -269,27 +269,19 @@ advice/prefetch, synchronization, teardown, fault, and checksum behavior:
 The command aborts before a requested size that cannot preserve its memory
 headroom; it never silently substitutes a smaller working set. The production
 Qwen3.8-27B loader registers mapped GGUF shards directly with HIP; see
-[the model's state ownership](../src/models/qwen/README.md#state-and-arithmetic).
+[the model's state ownership](../src/models/qwen35/README.md#state-and-arithmetic).
 
 ### Focused HIP benchmark
 
-List cases, then run the smallest relevant matrix:
+Standalone microbenchmarks compile one kernel family with its exact checks:
 
 ```sh
-nix develop -c cmake --preset gpu-test
-nix develop -c cmake --build --preset gpu-test --target gufo-kernel-bench tune_hipblaslt
-./build/gpu-test/gufo-kernel-bench --help
-
-./build/gpu-test/gufo-kernel-bench \
-  --case decode-attention \
-  --context 4096,8192,12288,16384 \
-  --warmup 5 \
-  --repetitions 30 \
-  --json
+tools/bench/build.sh tools/qwen27b/attention_bench.hip
+/tmp/attention_bench
 ```
 
-The report includes raw HIP-event samples, summary latency, correctness
-sentinels, dispatch choices, and the privacy-safe machine fingerprint.
+They report correctness beside timing; the model benchmark above remains the
+measure of a change.
 
 ### Roofline calibration
 
@@ -297,8 +289,8 @@ Score every kernel against measured ceilings, not spec-sheet numbers. Build the
 standalone microbenchmarks and run the calibrator:
 
 ```sh
-nix develop -c tools/bench/build.sh              # all of tools/bench/*.hip -> /tmp
-nix develop -c tools/bench/build.sh gfx1151_peak # or one by name
+tools/bench/build.sh              # all of tools/bench/*.hip -> /tmp
+tools/bench/build.sh gfx1151_peak # or one by name
 /tmp/gfx1151_peak
 ```
 
@@ -314,11 +306,10 @@ compiler. When changing this tool, inspect the emitted instruction counts as
 well as the checksums: a correct result alone cannot detect hoisted work.
 Calibration from the earlier gated-sink implementation is invalid.
 
-`tools/bench/build.sh` exists because `hipcc` invokes the raw HIP clang++ rather
-than the Nix cc wrapper, so it forwards the include and library paths that
-`nix develop` exports through `NIX_CFLAGS_COMPILE` / `NIX_LDFLAGS`. It also
-prints per-kernel VGPR, occupancy, spill, and LDS usage into
-`/tmp/<name>.res.txt`.
+`tools/bench/build.sh` compiles these programs as the kernel crates compile
+their kernels: compiler, headers and runtime from one ROCm prefix and the host
+GCC installation, outside `nix develop`. It also prints per-kernel VGPR,
+occupancy, spill, and LDS usage into `/tmp/<name>.res.txt`.
 
 ### Kernel design iteration
 
@@ -329,7 +320,7 @@ model comparisons before retaining a change: a microbenchmark can improve
 while the model gets slower.
 
 ```sh
-nix develop -c tools/bench/build.sh tools/qwen27b/prefill_gemm_bench.hip
+tools/bench/build.sh tools/qwen27b/prefill_gemm_bench.hip
 /tmp/prefill_gemm_bench q5 17408 5120 2048 12
 /tmp/prefill_gemm_bench q8-swiglu 2048 12
 
@@ -339,8 +330,8 @@ nix develop -c tools/bench/build.sh tools/qwen27b/prefill_gemm_bench.hip
 
 The Qwen prefill probe calls the production kernels and requires exact bytes,
 including quantization scales and sums. Other probes report their numerical
-error beside timings. Retained changes are validated with Nix release model
-measurements and the affected operator checks.
+error beside timings. Retained changes are validated with release model
+measurements (`target/release/gufo`) and the affected operator checks.
 
 **Size the working set like the model does.** Strix Halo has a 32 MB MALL, and a
 single decoder projection is 4-25 MB. Timing one shape in a repeat loop leaves it
@@ -361,7 +352,7 @@ busy, and what changed between two runs.
 ```sh
 # profile a command and analyze in one step
 nix develop -c python3 tools/prof/prof.py run --stages qwen -- \
-  ./result/bin/gufo bench --model "$MODEL" -p 2048 -n 0 -r 1
+  ./target/release/gufo bench --model "$MODEL" -p 2048 -n 0 -r 1
 
 # re-analyze an existing database
 nix develop -c python3 tools/prof/prof.py show /tmp/prof/prof_results.db --top 20
@@ -372,11 +363,6 @@ nix develop -c python3 tools/prof/prof.py show /tmp/prof/prof_results.db --passe
 
 # A/B two runs, per stage and per kernel
 nix develop -c python3 tools/prof/prof.py diff before_results.db after_results.db
-
-# H3: one real-weight block, without generating a video
-GUFO_H3_MODEL_ROOT=/var/llms/huggingface/MiniMax-H3 \
-  nix develop -c python3 tools/prof/prof.py run --stages h3 -- \
-  ./build/gpu-test/minimax_h3_dit_hip_test --profile-7136-fused
 ```
 
 A benchmark trace holds several passes (model upload, a warm-up prefill, the
@@ -399,14 +385,10 @@ nix develop -c rocprofv3 \
   --stats \
   --summary \
   --output-directory /tmp/gufo-profile \
-  -- ./build/gpu-test/gufo-kernel-bench \
-    --case decode-attention \
-    --context 16384 \
-    --warmup 1 \
-    --repetitions 3
+  -- ./target/release/gufo bench --model "$MODEL" -p 512 -n 32 -r 1
 ```
 
-Use the emitted ROCTx case marker to isolate the measured region. Add selected
+Isolate the measured pass as for `prof.py` above. Add selected
 PMC counters only in a separate diagnostic pass.
 
 ### Instruction mix
@@ -416,7 +398,7 @@ groups one kernel's emitted instructions into matrix, VALU, LDS, global memory,
 and wait/barrier categories:
 
 ```sh
-nix develop -c hipcc -O3 --offload-arch=gfx1151 -std=c++20 \
+/opt/rocm/core/bin/hipcc -O3 --offload-arch=gfx1151 -std=c++20 \
   -I. --cuda-device-only -S -o /tmp/k.s tools/qwen27b/prefill_gemm_bench.hip
 nix develop -c python3 tools/prof/isa_mix.py /tmp/k.s            # list kernels
 nix develop -c python3 tools/prof/isa_mix.py /tmp/k.s W8A8BlockedWmmaGEMMKernel
@@ -428,21 +410,13 @@ Attributing epilogue instructions to the inner loop led to one rejected
 experiment (`opt-c163-lowoverhead`); confirm a hypothesis with an ablation in the
 microbenchmark before acting on the mix.
 
-### Offline tuning and replay
+### Recurrence and attention probes
 
 ```sh
-./build/gpu-test/tune_hipblaslt \
-  --out /tmp/gufo-hipblaslt-plans.bin \
-  --warmup 3 \
-  --repetitions 10
-
-GUFO_HIPBLASLT_PLAN_CACHE=/tmp/gufo-hipblaslt-plans.bin \
-  ./result/bin/gufo bench ...
-
-nix develop -c tools/bench/build.sh tools/qwen27b/deltanet_bench.hip
+tools/bench/build.sh tools/qwen27b/deltanet_bench.hip
 /tmp/deltanet_bench 8 48
 
-nix develop -c tools/bench/build.sh tools/qwen27b/attention_bench.hip
+tools/bench/build.sh tools/qwen27b/attention_bench.hip
 /tmp/attention_bench
 /tmp/attention_bench rope
 ```
@@ -451,12 +425,12 @@ The recurrence probe checks exact outputs/state with a rotating 144 MiB state
 working set. The Qwen27B model suite checks full-logit rollback, including
 replay-ring wraparound; `gufo bench` measures actual speculative throughput.
 
-Generated profiler, plan, and replay artifacts stay outside the repository.
+Generated profiler and replay artifacts stay outside the repository.
 
 ### Dispatch telemetry
 
 ```sh
-GUFO_DISPATCH_TELEMETRY=1 ./build/gpu-test/gufo-kernel-bench ...
+GUFO_DISPATCH_TELEMETRY=1 ./target/release/gufo bench ...
 ```
 
 Telemetry is diagnostic JSONL. It records semantic dispatch decisions and
@@ -472,7 +446,7 @@ A performance change is retained only when:
 - Request state, rollback, cancellation, and cleanup remain correct.
 - The declared workload improves outside measurement noise.
 - Memory, startup, and tail latency do not regress unexpectedly.
-- Required Nix checks pass on the exact staged source.
+- `tools/ci/check-rust.sh` passes on the exact staged source.
 
 Document the winning route, current measurements, reproduction command, and
 remaining gap. Keep rejected alternatives to a short summary or the relevant

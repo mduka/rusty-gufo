@@ -1,7 +1,8 @@
 # Qwen27B benchmarks
 
-AMD Strix Halo `gfx1151`, 128 GB unified memory. Gufo versus llama.cpp
-`b11069`, using the same Q4_K_XL / Q8_K_XL targets and Q4_K_M DFlash2 draft.
+AMD Strix Halo `gfx1151`, 128 GB unified memory. Gufo (the C++ engine) versus
+llama.cpp `b11069`, using the same Q4_K_XL / Q8_K_XL targets and Q4_K_M
+DFlash2 draft.
 Gufo uses its adaptive controller. HTTP, greedy, thinking off.
 
 All Gufo rows were refreshed October 19, 2026 on `11813e51` (wave64

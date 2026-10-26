@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import io
 import os
@@ -18,37 +19,12 @@ from gufo.model_bench.charts import render_charts
 from gufo.model_bench.config import BenchConfig, load_config
 from gufo.model_bench.llm import Session, _measure_depth, run_loading, run_multi, run_single, run_table
 from gufo.model_bench.render import _serving_rate, layout_for, parse_table, render_table
-from gufo.model_bench.servers import HipMemory, Server
+from gufo.model_bench.servers import Server
 
 
 def check(condition, message):
     if not condition:
         raise AssertionError(message)
-
-
-with tempfile.TemporaryDirectory() as temporary:
-    directory = Path(temporary)
-    executable = directory / "gufo"
-    native = directory / ".gufo-wrapped"
-    link = directory / "result-gufo"
-    library = directory / "libamdhip64.so"
-    executable.write_bytes(b"#!/bin/sh\n")
-    native.write_bytes(b"\x7fELF")
-    library.touch()
-    link.symlink_to(executable)
-    output = MagicMock(stdout=f"libamdhip64.so => {library} (0x0)\n")
-    with patch("gufo.model_bench.servers.subprocess.run", return_value=output) as ldd, \
-            patch("gufo.model_bench.servers.ctypes.CDLL"):
-        check(HipMemory.for_binary(link).library == library, "wrapped HIP library resolution")
-        check(ldd.call_args.args[0] == ["ldd", str(native.resolve())], "inspect the wrapped ELF")
-        executable.write_bytes(b"\x7fELF")
-        check(HipMemory.for_binary(link).library == library, "direct HIP library resolution")
-        check(ldd.call_args.args[0] == ["ldd", str(executable.resolve())], "prefer a direct ELF")
-        executable.write_bytes(b"#!/bin/sh\n")
-        native.unlink()
-        ldd.reset_mock()
-        check(HipMemory.for_binary(link) is None, "unsupported wrapper has no HIP library")
-        check(not ldd.called, "do not inspect shell scripts with ldd")
 
 
 GUFO_USAGE = {
@@ -459,6 +435,31 @@ check(
     "llama cache_n marks a prompt-cache hit",
 )
 check(llama.server_inter_token_ms == 10.0, "llama ITL derived from timings")
+
+
+
+class ReasoningResponse(FakeResponse):
+    def __init__(self):
+        super().__init__()
+        thinking = {"choices": [{"index": 0, "delta": {"reasoning_content": "hmm"},
+                                 "finish_reason": None}]}
+        self.lines[2:2] = [f"data: {json.dumps(thinking)}\n".encode(), b"\n"]
+
+
+answer = request_with(fake_urlopen)
+thinking = request_with(lambda request, timeout: ReasoningResponse())
+check(
+    answer.completion_sha256
+    == hashlib.sha256(b"one two").hexdigest(),
+    "an answer without reasoning hashes its content alone",
+)
+check(
+    thinking.completion_sha256
+    == hashlib.sha256(json.dumps(["hmm", "one two"]).encode()).hexdigest()
+    and thinking.client_ttft_ms <= answer.client_ttft_ms + 1000.0
+    and thinking.client_event_inter_token_ms is not None,
+    "streamed reasoning is output: it is hashed and starts the TTFT",
+)
 
 try:
     request_with(fake_urlopen_llama, endpoint_profile="gufo")

@@ -107,6 +107,20 @@ int64_t ggml_time_us() {
 
 namespace {
 
+/* gufo (Rust engine): scratch the caller passes with each call
+ * (qfn_mmq_set_scratch), a stack over caller memory on this thread. Each
+ * stream's work and every graph that captures it then keeps scratch the
+ * caller owns and sizes, which a growing arena would free under a captured
+ * graph; without it the per-stream arenas below serve the call. */
+struct caller_scratch {
+    char *base = nullptr;
+    size_t capacity = 0;
+    size_t top = 0;
+    size_t depth = 0;
+    size_t sizes[16] = {};
+};
+thread_local caller_scratch t_scratch;
+
 /* qwen38: every allocation the tier makes is scoped to one entry point and
  * released in reverse order, and each arena serves one stream (qfn_pool_for_stream),
  * so stream order makes a stack over one device arena enough. It replaces
@@ -144,6 +158,18 @@ struct qfn_stack_pool : public ggml_hip_pool {
     void * alloc(size_t size, size_t * actual_size) override {
         ggml_hip_set_device(device);
         const size_t aligned = (size + 255) & ~(size_t) 255;
+        if (t_scratch.base) {
+            caller_scratch & c = t_scratch;
+            if (c.top + aligned > c.capacity || c.depth == std::size(c.sizes)) {
+                fprintf(stderr, "qfn_stack_pool: caller scratch exhausted\n");
+                abort();
+            }
+            char *ptr = c.base + c.top;
+            c.sizes[c.depth++] = aligned;
+            c.top += aligned;
+            if (actual_size) *actual_size = aligned;
+            return ptr;
+        }
         if (top + aligned > capacity) reserve(top + aligned);
         char *ptr = base + top;
         top += aligned;
@@ -154,6 +180,15 @@ struct qfn_stack_pool : public ggml_hip_pool {
 
     void free(void * ptr, size_t /*size*/) override {
         if (!ptr) return;
+        if (t_scratch.base) {
+            caller_scratch & c = t_scratch;
+            if (c.depth == 0 || ptr != c.base + c.top - c.sizes[c.depth - 1]) {
+                fprintf(stderr, "qfn_stack_pool: non-LIFO free of caller scratch\n");
+                abort();
+            }
+            c.top -= c.sizes[--c.depth];
+            return;
+        }
         if (live.empty() || live.back().first != ptr) {
             fprintf(stderr, "qfn_stack_pool: non-LIFO free\n");
             abort();
@@ -183,6 +218,14 @@ ggml_hip_pool & qfn_pool_for_stream(int device, hipStream_t stream) {
     auto & pool = g_stream_pools[{device, stream}];
     if (!pool) pool = ggml_backend_hip_context::new_pool_for_device(device, 0);
     return *pool;
+}
+
+extern "C" int qfn_mmq_set_scratch(void * base, size_t bytes) {
+    if (t_scratch.depth != 0) return -1;
+    t_scratch = caller_scratch{};
+    t_scratch.base = static_cast<char *>(base);
+    t_scratch.capacity = base ? bytes : 0;
+    return 0;
 }
 
 // The caller must have stopped every host submission and allocation on `stream` first: the

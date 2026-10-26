@@ -1,7 +1,7 @@
 # Qwen3-ASR benchmarks
 
-2026-09-21, Linux gfx1151, BF16, Nix production binary `ce73ab914d06`
-(SHA-256 prefix). Resident model; one warmup and three timed requests.
+2026-09-21, Linux gfx1151, BF16, the upstream C++ production binary.
+Resident model; one warmup and three timed requests.
 RTF = request time / input duration, lower is better.
 
 Warm-file-cache CLI model setup: **0.37 s**. Cold HTTP readiness after dependency
@@ -49,8 +49,8 @@ launch loop remains. Text and library projections dominate. Profiling overhead
 is excluded from the timing table; the measured unprofiled request is 985.67 ms.
 
 ```sh
-nix build
-nix develop -c python3 src/models/qwen3_asr/tools/benchmark.py \
+cargo build --release -p gufo
+nix develop -c python3 tools/bench/qwen3-asr-bench.py \
   --model "$MODEL" --audio speech.wav --warmup 1 --repeat 3
 ```
 

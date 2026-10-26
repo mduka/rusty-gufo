@@ -1,0 +1,29 @@
+[package]
+name = "gufo-qwen-image-21"
+version = "0.0.0"
+description = "Qwen-Image-2.1 text-to-image generation and editing on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The C++ sources, kernels and tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs", "tests/fixtures/*"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-qwen-image-21 --features gpu
+gpu = []
+# Tests that need the checkpoint (see tests/common): --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-hip.workspace = true
+gufo-qwen-image-21-kernels = { path = "kernels" }
+png.workspace = true
+sha2.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

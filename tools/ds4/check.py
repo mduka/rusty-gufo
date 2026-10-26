@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the owned DS4 checks inside nix develop; model artifacts are required."""
+"""Run the owned DS4 checks; model artifacts are required for the model suites."""
 from __future__ import annotations
 
 import argparse
@@ -9,12 +9,36 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+# The kernel operator checks are standalone HIP programs and the fixture
+# provenance check a Python script; the engine, its sessions, serving, CLI
+# and the answer grading run in Rust. Model QUALITY checks are ignored by
+# the ordinary test run.
+FEATURES = ("gufo-hip/gpu,gufo-deepseek-v4-flash-kernels/gpu,gufo-deepseek-v4-flash/gpu,"
+            "gufo-deepseek-v4-flash/models,gufo-core/models")
 SUITES = {
-    "fast": ("^ds4\\.(template|cli|dataset|eval|sampling)$", ["ds4_chat_template_test", "ds4_cli_test", "ds4_eval_test", "ds4_sampling_test"]),
-    "kernels": ("^ds4\\.(projections|attention)$",
-                ["ds4_projection_test",
-                 "ds4_attention_test"]),
-    "model": ("^ds4\\.(target|dspark|serving|chat)$", ["ds4_quality_test", "ds4_serving_test", "ds4_cli_test"]),
+    "fast": [
+        ["python3", "tests/models/deepseek_v4_flash/dataset_test.py"],
+        ["cargo", "test", "-p", "gufo-eval"],
+        ["cargo", "test", "-p", "gufo-deepseek-v4-flash", "--lib",
+         "--test", "chat_template", "--test", "load"],
+        ["cargo", "test", "-p", "gufo", "--bin", "gufo", "--", "prompt::tests", "bench::tests"],
+    ],
+    "kernels": [
+        ["tests/models/deepseek_v4_flash/run_operator_checks.sh"],
+        ["cargo", "test", "--profile", "gpu-test", "-p", "gufo-deepseek-v4-flash-kernels",
+         "--features", "gufo-hip/gpu,gufo-deepseek-v4-flash-kernels/gpu"],
+    ],
+    "model": [
+        ["cargo", "test", "--profile", "gpu-test", "-p", "gufo-deepseek-v4-flash",
+         "--features", FEATURES, "--test", "forward", "--test", "dspark", "--test", "routes",
+         "--test", "q8_routes", "--test", "chat_template",
+         "--test", "tokenizer"],
+        ["cargo", "test", "--profile", "gpu-test", "-p", "gufo-deepseek-v4-flash",
+         "--features", FEATURES, "--lib", "--test", "quality", "--test", "serving", "--",
+         "--ignored", "--nocapture", "--test-threads", "1"],
+        ["cargo", "test", "-p", "gufo", "--features", "gpu", "--test", "deepseek", "--",
+         "--ignored"],
+    ],
 }
 
 
@@ -46,8 +70,8 @@ def main() -> None:
     parser.add_argument("--min-keep", type=int, default=0,
                         help="benchmark: --min-keep both logs were produced with")
     args = parser.parse_args()
-    if not os.environ.get("IN_NIX_SHELL"):
-        parser.error("run with nix develop -c tools/ds4/check.py")
+    if args.suite == "reference" and not os.environ.get("IN_NIX_SHELL"):
+        parser.error("the reference suite runs its Python tools in nix develop")
     if args.prefill_only and args.suite != "reference":
         parser.error("--prefill-only requires the reference suite")
     if args.suite == "benchmark":
@@ -89,18 +113,12 @@ def main() -> None:
             if not value or not Path(value).is_file():
                 parser.error(f"model checks require an existing artifact: {name}")
             environment[name] = str(Path(value).absolute())
-    regex, targets = SUITES.get(args.suite, ("^ds4\\.", [
-        target for _, group in SUITES.values() for target in group]))
+    suites = [SUITES[args.suite]] if args.suite in SUITES else (
+        [] if reference else list(SUITES.values()))
+    commands = [command for suite in suites for command in suite]
     if reference:
-        targets = ["ds4_quality_test"]
-    commands = [
-        ["cmake", "--preset", "gpu-test"],
-        ["cmake", "--build", "--preset", "gpu-test", "--target", *targets],
-    ]
-    if not reference:
-        commands.append(
-            ["ctest", "--test-dir", "build/gpu-test", "-R", regex,
-             "--output-on-failure", "--stop-on-failure"])
+        commands.append(["cargo", "build", "--release", "-p", "gufo-deepseek-v4-flash",
+                         "--example", "reference"])
     for command in commands:
         subprocess.run(command, cwd=ROOT,
                        env=environment, check=True)

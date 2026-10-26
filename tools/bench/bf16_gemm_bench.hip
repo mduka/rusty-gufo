@@ -4,9 +4,7 @@
 // beats a native W8A8 WMMA kernel on gfx1151. Both hipBLAS (rocBLAS/Tensile)
 // and hipBLASLt are measured because their kernel selection differs.
 //
-//   nix develop -c hipcc -O3 --offload-arch=gfx1151 -std=c++20 \
-//       tools/bench/bf16_gemm_bench.hip -lhipblas -lhipblaslt \
-//       -o /tmp/bf16_gemm_bench
+//   tools/bench/build.sh bf16_gemm_bench
 //
 #include <hip/hip_bf16.h>
 #include <hip/hip_runtime.h>

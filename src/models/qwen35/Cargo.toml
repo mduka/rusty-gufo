@@ -1,0 +1,33 @@
+[package]
+name = "gufo-qwen35"
+version = "0.0.0"
+description = "The qwen35 architecture (Qwen3.8 27B, dense Qwen3.5) on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device and the model: cargo test -p gufo-qwen35 --features gpu
+gpu = []
+# Tests that need the model file but no device: cargo test -p gufo-qwen35 --features models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-formats.workspace = true
+gufo-hip.workspace = true
+gufo-qwen = { path = "../qwen" }
+gufo-qwen-kernels = { path = "../qwen/kernels" }
+sha2.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,473 @@
+# Kernel contract for the Qwen3-ASR kernels (docs/RUST.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes (tests/extents.rs).
+
+[library]
+name = "qwen3_asr"
+root = "../../../.."
+namespace = "gufo::models::qwen3_asr::hip"
+headers = [
+  "src/models/qwen3_asr/hip/text_ops.hpp",
+  "src/models/qwen3_asr/hip/audio_ops.hpp",
+]
+
+[[source]]
+path = "src/models/qwen3_asr/hip/text_ops.hip"
+
+[[source]]
+path = "src/models/qwen3_asr/hip/audio_ops.hip"
+
+[[source]]
+path = "src/models/qwen3_asr/hip/convolution.hip"
+
+[[launcher]]
+name = "rms_norm"
+cpp = "LaunchTextRMSNorm"
+returns = "void"
+doc = "Qwen3 RMSNorm: normalize in f32, round to BF16, multiply by the BF16 scale, round again."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "batch_size * dimension" },
+  { name = "weight", kind = "in", elem = "f32", len = "dimension" },
+  { name = "output", kind = "out", elem = "bf16", len = "batch_size * dimension" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dimension", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 4, dimension = 2048, epsilon = 1e-6 },
+  { batch_size = 1, dimension = 1, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "residual_add_rms_norm"
+cpp = "LaunchTextResidualAddRMSNorm"
+returns = "void"
+doc = "Adds a BF16-rounded residual into `hidden` and emits the following BF16 RMSNorm."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "batch_size * dimension" },
+  { name = "update", kind = "in", elem = "f32", len = "batch_size * dimension" },
+  { name = "weight", kind = "in", elem = "f32", len = "dimension" },
+  { name = "output", kind = "out", elem = "bf16", len = "batch_size * dimension" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dimension", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 3, dimension = 1024, epsilon = 1e-6 },
+  { batch_size = 2, dimension = 33, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "swiglu"
+cpp = "LaunchTextSwiGLU"
+returns = "void"
+doc = "BF16-rounded SiLU(gate) times up."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "count" },
+  { name = "up", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 65536 },
+  { count = 257 },
+  { count = 1 },
+]
+
+[[launcher]]
+name = "round_bf16"
+cpp = "LaunchTextRoundBfloat16"
+returns = "void"
+doc = "Rounds f32 values to the nearest BF16 in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 4097 },
+  { count = 1 },
+]
+
+[[launcher]]
+name = "bf16_to_f32"
+cpp = "LaunchTextBfloat16ToFloat"
+returns = "void"
+doc = "Widens BF16 values to f32."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 4097 },
+  { count = 1 },
+]
+
+[[launcher]]
+name = "qk_norm_rope"
+cpp = "LaunchTextQkNormRoPE"
+returns = "supported"
+doc = "q/k RMSNorm + RoPE, value rounding and optional f32 KV-cache write."
+params = [
+  { name = "query", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "key", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "value", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "query_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "key_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "start_position", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+  # Cache layout [layer][kv_head][max_context][head_dim]; this launch writes
+  # layer `layer_index` only.
+  { name = "key_cache", kind = "inout", elem = "f32", optional = true, len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "value_cache", kind = "inout", elem = "f32", optional = true, len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "layer_index", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+]
+probes = [
+  { batch_size = 3, num_heads = 16, num_key_value_heads = 8, head_dim = 128, start_position = 5, rope_theta = 1000000.0, epsilon = 1e-6, layer_index = 1, max_context = 64, with = ["key_cache", "value_cache"] },
+  { batch_size = 2, num_heads = 4, num_key_value_heads = 4, head_dim = 64, start_position = 0, rope_theta = 1000000.0, epsilon = 1e-6, layer_index = 0, max_context = 8 },
+]
+
+[[launcher]]
+name = "embedding_lookup"
+cpp = "LaunchTextEmbeddingLookup"
+returns = "void"
+doc = "Gathers BF16 embedding rows `table[token_ids[b]]` into f32 rows."
+params = [
+  { name = "table", kind = "in", elem = "bf16", len = "rows * hidden_size" },
+  { name = "token_ids", kind = "indices", len = "batch_size", below = "rows" },
+  { name = "output", kind = "out", elem = "f32", len = "batch_size * hidden_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  # Rows of `table`; the kernel trusts the token IDs to stay below it.
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { batch_size = 5, hidden_size = 2048, rows = 3 },
+  { batch_size = 1, hidden_size = 300, rows = 1 },
+]
+
+[[launcher]]
+name = "row_gemv"
+cpp = "LaunchTextRowGemv"
+returns = "void"
+doc = "Batch-one BF16 GEMV, one wave per row: the fallback of `decode_gemv`."
+params = [
+  { name = "weights", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "input", kind = "in", elem = "f32", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 9, columns = 2048 },
+  { rows = 3, columns = 21 },
+]
+
+[[launcher]]
+name = "batched_attention"
+cpp = "LaunchTextBatchedAttention"
+returns = "void"
+doc = "Causal attention of `tokens` queries over the f32 KV cache of one layer."
+requires = [
+  "start_position + tokens <= max_context",
+  "num_key_value_heads >= 1",
+  "num_heads % num_key_value_heads == 0",
+  "head_dim <= 256",
+]
+params = [
+  { name = "query", kind = "in", elem = "f32", len = "tokens * num_heads * head_dim" },
+  { name = "key_cache", kind = "in", elem = "f32", len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "value_cache", kind = "in", elem = "f32", len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "tokens * num_heads * head_dim" },
+  { name = "out_context_bfloat16", kind = "out", elem = "bf16", optional = true, len = "tokens * num_heads * head_dim" },
+  { name = "layer_index", kind = "scalar", type = "u32" },
+  { name = "start_position", kind = "scalar", type = "u32" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+probes = [
+  { layer_index = 1, start_position = 60, tokens = 5, max_context = 70, num_heads = 4, num_key_value_heads = 2, head_dim = 64, with = ["out_context_bfloat16"] },
+  { layer_index = 0, start_position = 0, tokens = 3, max_context = 3, num_heads = 2, num_key_value_heads = 2, head_dim = 128 },
+]
+
+[[launcher]]
+name = "decode_attention"
+cpp = "LaunchTextDecodeAttention"
+returns = "supported"
+doc = "Batch-one attention at `position`; declines contexts shorter than 64, where `batched_attention` sums in another order."
+params = [
+  { name = "query", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "key_cache", kind = "in", elem = "f32", len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "value_cache", kind = "in", elem = "f32", len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "out_context_bfloat16", kind = "out", elem = "bf16", optional = true, len = "num_heads * head_dim" },
+  { name = "layer_index", kind = "scalar", type = "u32" },
+  { name = "position", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+probes = [
+  { layer_index = 1, position = 70, max_context = 80, num_heads = 4, num_key_value_heads = 2, head_dim = 64, with = ["out_context_bfloat16"] },
+  { layer_index = 0, position = 63, max_context = 64, num_heads = 2, num_key_value_heads = 1, head_dim = 128 },
+]
+
+[[launcher]]
+name = "decode_gemv"
+cpp = "LaunchTextDecodeGemvFlat"
+returns = "supported"
+doc = "Batch-one BF16 GEMV over up to three weight tensors sharing one activation vector."
+params = [
+  { name = "weights0", kind = "in", elem = "bf16", len = "rows0 * columns" },
+  { name = "output0", kind = "out", elem = "f32", len = "rows0" },
+  { name = "rows0", kind = "scalar", type = "u32" },
+  { name = "weights1", kind = "in", elem = "bf16", optional = true, len = "rows1 * columns" },
+  { name = "output1", kind = "out", elem = "f32", optional = true, len = "rows1" },
+  { name = "rows1", kind = "scalar", type = "u32" },
+  { name = "weights2", kind = "in", elem = "bf16", optional = true, len = "rows2 * columns" },
+  { name = "output2", kind = "out", elem = "f32", optional = true, len = "rows2" },
+  { name = "rows2", kind = "scalar", type = "u32" },
+  { name = "input", kind = "in", elem = "bf16", len = "columns" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows0 = 5, rows1 = 3, rows2 = 2, columns = 2048, with = ["weights1", "output1", "weights2", "output2"] },
+  { rows0 = 7, rows1 = 9, rows2 = 1, columns = 64, with = ["weights1", "output1"] },
+  { rows0 = 33, rows1 = 1, rows2 = 1, columns = 8 },
+]
+
+[[launcher]]
+name = "argmax"
+cpp = "LaunchTextArgmax"
+returns = "void"
+doc = "Greedy token: the lowest index of the maximum; UINT32_MAX for any nonfinite logit."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "count" },
+  { name = "output_token", kind = "out", elem = "u32", len = "1" },
+  { name = "count", kind = "scalar", type = "usize" },
+  # 1024 partial results of 8 bytes (TextArgmaxScratchElements).
+  { name = "scratch", kind = "inout", elem = "f32", optional = true, len = "2048" },
+]
+probes = [
+  { count = 151936, with = ["scratch"] },
+  { count = 100 },
+]
+
+[[launcher]]
+name = "chunk_log_mel"
+cpp = "LaunchChunkLogMel"
+returns = "void"
+doc = "Splits mel-major log-mel features into zero-padded BF16 chunks of 100 frames."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "128 * frames" },
+  { name = "output", kind = "out", elem = "bf16", len = "chunks * 128 * 100" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "chunks", kind = "scalar", type = "usize" },
+]
+probes = [
+  { frames = 250, chunks = 3 },
+  { frames = 1, chunks = 1 },
+]
+
+[[launcher]]
+name = "bias_gelu"
+cpp = "LaunchBiasGelu"
+returns = "void"
+doc = "In-place BF16 bias add (per channel) and exact GELU."
+requires = ["channels >= 1", "spatial_size >= 1"]
+params = [
+  { name = "values", kind = "inout", elem = "bf16", len = "elements" },
+  { name = "bias", kind = "in", elem = "bf16", len = "channels" },
+  { name = "elements", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "spatial_size", kind = "scalar", type = "usize" },
+]
+probes = [
+  { elements = 38400, channels = 480, spatial_size = 80 },
+  { elements = 7, channels = 3, spatial_size = 1 },
+]
+
+[[launcher]]
+name = "pack_convolution_weights"
+cpp = "LaunchPackConvolutionWeights"
+returns = "void"
+doc = "Reorders a [480, 480, 3, 3] BF16 kernel for `convolution3x3`."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "480 * 480 * 9" },
+  { name = "output", kind = "out", elem = "bf16", len = "480 * 480 * 9" },
+]
+probes = [{}]
+
+[[launcher]]
+name = "convolution3x3"
+cpp = "LaunchConvolution3x3"
+returns = "void"
+doc = "3x3, stride-two, padded BF16 convolution to 480 channels; the three encoder shapes only (the launcher throws otherwise)."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "chunks * input_channels * height * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "480 * input_channels * 9" },
+  { name = "output", kind = "out", elem = "bf16", len = "chunks * 480 * ((height + 1) / 2) * ((width + 1) / 2)" },
+  { name = "chunks", kind = "scalar", type = "usize" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+  { name = "height", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [
+  { chunks = 2, input_channels = 1, height = 128, width = 100 },
+  { chunks = 1, input_channels = 480, height = 64, width = 50 },
+  { chunks = 2, input_channels = 480, height = 32, width = 25 },
+]
+
+[[launcher]]
+name = "conv_output_layout"
+cpp = "LaunchConvOutputLayout"
+returns = "void"
+doc = "Reorders [chunk, 480, 16, 13] convolution output to [chunk * 13, 7680] rows."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "chunks * 480 * 16 * 13" },
+  { name = "output", kind = "out", elem = "bf16", len = "chunks * 13 * 7680" },
+  { name = "chunks", kind = "scalar", type = "usize" },
+]
+probes = [
+  { chunks = 3 },
+  { chunks = 1 },
+]
+
+[[launcher]]
+name = "add_position_and_compact"
+cpp = "LaunchAddPositionAndCompact"
+returns = "void"
+doc = "Adds sinusoidal positions and drops the padded time steps of the last chunk."
+requires = [
+  "chunks >= 1",
+  "(chunks - 1) * 100 < feature_frames",
+  "feature_frames <= chunks * 100",
+]
+params = [
+  { name = "projected", kind = "in", elem = "f32", len = "chunks * 13 * 1024" },
+  { name = "compact_output", kind = "out", elem = "f32", len = "((chunks - 1) * 13 + (feature_frames - (chunks - 1) * 100 + 7) / 8) * 1024" },
+  { name = "feature_frames", kind = "scalar", type = "usize" },
+  { name = "chunks", kind = "scalar", type = "usize" },
+]
+probes = [
+  { feature_frames = 250, chunks = 3 },
+  { feature_frames = 100, chunks = 1 },
+  { feature_frames = 1, chunks = 1 },
+]
+
+[[launcher]]
+name = "layer_norm_bf16"
+cpp = "LaunchLayerNormToBfloat16"
+returns = "void"
+doc = "LayerNorm of f32 rows with BF16 scale and bias, written as BF16."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "weight", kind = "in", elem = "bf16", len = "columns" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 4, columns = 1024, epsilon = 1e-5 },
+  { rows = 1, columns = 3, epsilon = 1e-5 },
+]
+
+[[launcher]]
+name = "bias_round_bf16"
+cpp = "LaunchBiasRoundBfloat16"
+returns = "void"
+doc = "Adds a BF16 bias per column and rounds the f32 values to BF16."
+requires = ["columns >= 1"]
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, columns = 2048 },
+  { rows = 1, columns = 1 },
+]
+
+[[launcher]]
+name = "residual_add_bf16"
+cpp = "LaunchResidualAddBfloat16"
+returns = "void"
+doc = "BF16-rounded residual addition in place."
+params = [
+  { name = "residual", kind = "inout", elem = "f32", len = "elements" },
+  { name = "update", kind = "in", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [
+  { elements = 4097 },
+  { elements = 1 },
+]
+
+[[launcher]]
+name = "bias_gelu_bf16"
+cpp = "LaunchBiasGeluToBfloat16"
+returns = "void"
+doc = "BF16 bias add and exact GELU of f32 values, written as BF16."
+requires = ["columns >= 1"]
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 2, columns = 4096 },
+  { rows = 1, columns = 5 },
+]
+
+[[launcher]]
+name = "segmented_self_attention"
+cpp = "LaunchSegmentedSelfAttention"
+returns = "void"
+doc = "Bidirectional attention within windows of `segment_tokens` (the audio tower)."
+requires = ["segment_tokens >= 1", "head_dim <= 64"]
+params = [
+  { name = "query", kind = "in", elem = "f32", len = "tokens * heads * head_dim" },
+  { name = "key", kind = "in", elem = "f32", len = "tokens * heads * head_dim" },
+  { name = "value", kind = "in", elem = "f32", len = "tokens * heads * head_dim" },
+  { name = "output", kind = "out", elem = "f32", len = "tokens * heads * head_dim" },
+  { name = "output_bfloat16", kind = "out", elem = "bf16", len = "tokens * heads * head_dim" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "segment_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+]
+probes = [
+  { tokens = 30, segment_tokens = 13, heads = 4, head_dim = 64 },
+  { tokens = 5, segment_tokens = 5, heads = 2, head_dim = 6 },
+]
+
+[[launcher]]
+name = "all_finite"
+cpp = "LaunchAllFinite"
+returns = "void"
+doc = "Clears `finite` when any value is NaN or infinite."
+params = [
+  { name = "values", kind = "in", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "finite", kind = "inout", elem = "u32", len = "1" },
+]
+probes = [
+  { count = 5000 },
+  { count = 1 },
+]

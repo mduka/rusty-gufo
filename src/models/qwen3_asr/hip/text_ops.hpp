@@ -125,6 +125,17 @@ constexpr std::uint32_t kTextDecodeGemvMaxTensors = 3;
                                         std::size_t columns,
                                         hipStream_t stream);
 
+/// LaunchTextDecodeGemv with up to three tensors as separate arguments, for
+/// the Rust launcher contract, which describes buffers but not tables of
+/// pointers. Tensor 1 is used when `weights1` is set, tensor 2 when tensor 1
+/// and `weights2` are; a weight without its output (or the reverse) is
+/// rejected like any unsupported geometry.
+[[nodiscard]] bool LaunchTextDecodeGemvFlat(
+    const void* weights0_bfloat16, float* output0, std::uint32_t rows0,
+    const void* weights1_bfloat16, float* output1, std::uint32_t rows1,
+    const void* weights2_bfloat16, float* output2, std::uint32_t rows2,
+    const void* input_bfloat16, std::size_t columns, hipStream_t stream);
+
 /// Exact greedy maximum, choosing the lowest index only for equal logits.
 /// Any nonfinite logit returns UINT32_MAX so generation fails closed.
 ///

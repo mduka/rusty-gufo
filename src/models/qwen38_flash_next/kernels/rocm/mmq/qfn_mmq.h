@@ -9,6 +9,12 @@ int qfn_mmq_init(int device);
 // Frees the scratch arena of a stream about to be destroyed (waits for its queued work).
 void qfn_mmq_release_stream(hipStream_t stream);
 
+// gufo (Rust engine): serves the calling thread's scratch allocations from
+// `bytes` of caller memory (256-byte aligned) until the next call; a null
+// base returns to the stream's arena. Fails while scratch from the previous
+// base is live.
+int qfn_mmq_set_scratch(void *base, size_t bytes);
+
 void qfn_mmq_set_routed_max_expert_rows(int rows);
 
 void qfn_mmq_set_routed_tile_cols(int cols);

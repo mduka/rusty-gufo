@@ -1,7 +1,8 @@
 # Models
 
 Linux x86-64 / AMD Strix Halo gfx1151 is the production target. Build with
-`nix build`; Python/reference toolchains are development-only. Model weights
+Cargo ([README](../../README.md#build-from-source)); Python/reference
+toolchains are development-only. Model weights
 are downloaded separately and are not part of the runtime package.
 
 | Model | Weights / supported inputs | Guide |
@@ -13,7 +14,6 @@ are downloaded separately and are not part of the runtime package.
 | EmbeddingGemma 2 | BF16 safetensors; text to embeddings | [Usage](embeddinggemma-2/README.md) |
 | Qwen3-TTS 12Hz 1.7B | BF16 safetensors; text/reference audio to speech | [Voice modes](qwen3-tts/README.md) |
 | Qwen-Image-2.1 | BF16 safetensors; generation and image editing | [Usage](qwen-image-2.1/README.md) |
-| MiniMax H3 FL2VA | Pinned safetensors; text to audiovisual output | [Presets and usage](minimax-h3/README.md) |
 
 Each model folder contains:
 
@@ -27,6 +27,14 @@ Keep executable fixtures with their tests. New logit/trace dumps and local
 profiles belong in ignored top-level `artifacts/`; commit only independent
 reference evidence needed by a maintained check. Old experiment records remain
 in Git history. See [benchmark methodology](../BENCHMARKS.md).
+
+The benchmark, quality and experiment records are upstream's: measured on the
+C++ engine at the revisions they name, unless an entry names the Rust engine.
+The Rust engine keeps upstream's kernels and arithmetic; its outputs, speed
+and memory against the C++ engine are in
+[Gufo in Rust](../RUST.md#performance-against-upstream). Records of upstream's
+component cache (`src/cache`) describe the C++ engine; Rust keeps its own
+continuation cache ([differences](../RUST.md#implemented-differently)).
 
 Quality reports distinguish agreement with an independent model implementation
 from consistency between Gufo execution modes. Greedy speculative decoding

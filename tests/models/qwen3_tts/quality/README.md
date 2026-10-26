@@ -29,7 +29,7 @@ nix develop --command python3 \
   --reference-npy artifacts/qwen3_tts/rocm/waveform.npy \
   --candidate-wav /tmp/qwen3-tts-native.wav \
   --asr-model /var/llms/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots/<revision> \
-  --gufo result/bin/gufo
+  --gufo target/release/gufo
 ```
 
 For native optimization A/B tests, pass the retained baseline directly with
@@ -37,4 +37,5 @@ For native optimization A/B tests, pass the retained baseline directly with
 
 The report checks word error rate against the requested text, transcript
 agreement, duration, finite samples, peak, and RMS. It complements—not
-replaces—the exact talker-logit and speech-decoder waveform gates.
+replaces—the exact parity gate of `gufo-qwen3-tts` (`tests/parity.rs`), which
+requires the C++ engine's codec codes and samples.

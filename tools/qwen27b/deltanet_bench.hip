@@ -1,5 +1,5 @@
 // Exact decode/verification/replay ablation using the production kernel.
-// Build: nix develop -c tools/bench/build.sh tools/qwen27b/deltanet_bench.hip
+// Build: tools/bench/build.sh tools/qwen27b/deltanet_bench.hip
 // Run: /tmp/deltanet_bench [rows=8] [iterations=48] [seed=1]
 // Rotating 48 recurrent states models the 144 MiB production working set.
 #define ENGINE_ENABLE_HIP 1

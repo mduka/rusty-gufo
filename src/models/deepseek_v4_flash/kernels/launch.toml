@@ -1,0 +1,3114 @@
+# Sources and launchers of DeepSeek V4 Flash (docs/RUST.md). The kernels and their launchers form one translation
+# unit, `backend.hip.cpp`, beside the vendored MMQ tier. The flags and
+# defines are those of the C++ build (CMakeLists.txt and the HIP targets).
+
+[library]
+name = "deepseek_v4_flash"
+root = "../../../.."
+namespace = "gufo::models::deepseek_v4_flash"
+f16_type = "__half"
+headers = [
+  "src/models/deepseek_v4_flash/kernels/rocm/launch.hpp",
+]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/backend.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+defines = ["USE_PROF_API=1", "_GNU_SOURCE", "__HIP_ROCclr__=1"]
+
+# The quantized matmul tier adapted from llama.cpp keeps its C++17 dialect.
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/ds4_ggml_stubs.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/ds4_mmq.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/ds4_mmq_d2r.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/mmid.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/mmvq.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+[[source]]
+path = "src/models/deepseek_v4_flash/kernels/rocm/mmq/quantize.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-value", "-Wno-unused-command-line-argument"]
+defines = ["DS4_ROCM_WMMA_MMQ_Y=64", "GGML_HIP_NO_VMM", "GGML_USE_HIP", "USE_PROF_API=1", "__HIP_ROCclr__=1"]
+
+# Generated launchers: the ds4 kernels on device pointers and the backend's
+# stream. Extents are element
+# counts. Trusted base: a wrong extent compiles and lets a kernel overrun its
+# buffer; review changes like unsafe code. Every launcher needs probes.
+
+[[launcher]]
+name = "rms_norm_plain_rows"
+cpp = "RmsNormPlainRows"
+returns = "void"
+doc = "Each of `rows` rows of `n` values divided by its root mean square."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n * rows" },
+  { name = "x", kind = "in", elem = "f32", len = "n * rows" },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { n = 16384, rows = 2, eps = 1e-6 },
+  { n = 4096, rows = 3, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "rms_norm_plain_rows_in_place"
+cpp = "RmsNormPlainRows"
+returns = "void"
+doc = "rms_norm_plain_rows over `out` in place."
+params = [
+  { name = "out", kind = "inout", elem = "f32", len = "n * rows" },
+  { name = "x", kind = "alias", of = "out", elem = "f32", read_only = true },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { n = 16384, rows = 2, eps = 1e-6 },
+  { n = 4096, rows = 1, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "rms_norm_weight_rows"
+cpp = "RmsNormWeightRows"
+returns = "void"
+doc = "rms_norm_plain_rows times an F32 weight row."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n * rows" },
+  { name = "x", kind = "in", elem = "f32", len = "n * rows" },
+  { name = "w", kind = "in", elem = "f32", len = "n" },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { n = 4096, rows = 1, eps = 1e-6 },
+  { n = 1024, rows = 5, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "rms_norm_weight_rows_in_place"
+cpp = "RmsNormWeightRows"
+returns = "void"
+doc = "rms_norm_weight_rows over `out` in place."
+params = [
+  { name = "out", kind = "inout", elem = "f32", len = "n * rows" },
+  { name = "x", kind = "alias", of = "out", elem = "f32", read_only = true },
+  { name = "w", kind = "in", elem = "f32", len = "n" },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { n = 4096, rows = 2, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "qkv_rms_norm_rows"
+cpp = "QkvRmsNormRows"
+returns = "void"
+doc = "The query and key-value rows normalized with their own F32 weights in one launch."
+params = [
+  { name = "q_out", kind = "out", elem = "f32", len = "q_n * rows" },
+  { name = "q", kind = "in", elem = "f32", len = "q_n * rows" },
+  { name = "q_w", kind = "in", elem = "f32", len = "q_n" },
+  { name = "q_n", kind = "scalar", type = "u32" },
+  { name = "kv_out", kind = "out", elem = "f32", len = "kv_n * rows" },
+  { name = "kv", kind = "in", elem = "f32", len = "kv_n * rows" },
+  { name = "kv_w", kind = "in", elem = "f32", len = "kv_n" },
+  { name = "kv_n", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { q_n = 1024, kv_n = 512, rows = 3, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "head_rms_norm"
+cpp = "HeadRmsNorm"
+returns = "void"
+doc = "Each head row of `x` divided by its root mean square, in place."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tok * n_head * head_dim" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_tok * n_head <= 4294967295"]
+probes = [
+  { n_tok = 2, n_head = 64, head_dim = 512, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "head_rms_norm_rope_tail"
+cpp = "HeadRmsNormRopeTail"
+returns = "supported"
+doc = "head_rms_norm fused with rope_tail for wide prefill (at least 96 tokens); otherwise unsupported."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tok * n_head * head_dim" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "n_rot", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_ctx_orig", kind = "scalar", type = "u32" },
+  { name = "inverse", kind = "scalar", type = "bool" },
+  { name = "freq_base", kind = "scalar", type = "f32" },
+  { name = "freq_scale", kind = "scalar", type = "f32" },
+  { name = "ext_factor", kind = "scalar", type = "f32" },
+  { name = "attn_factor", kind = "scalar", type = "f32" },
+  { name = "beta_fast", kind = "scalar", type = "f32" },
+  { name = "beta_slow", kind = "scalar", type = "f32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_rot <= head_dim", "n_rot % 2 == 0", "head_dim >= 1", "head_dim <= 512", "n_tok * n_head <= 4294967295"]
+probes = [
+  { n_tok = 96, n_head = 64, head_dim = 512, n_rot = 64, pos0 = 7, n_ctx_orig = 65536, inverse = false, freq_base = 10000.0, freq_scale = 0.025, ext_factor = 1.0, attn_factor = 1.0, beta_fast = 32.0, beta_slow = 1.0, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "rope_tail"
+cpp = "RopeTail"
+returns = "void"
+doc = "Rotary embedding of the last `n_rot` values of each head row, in place; row `t` at position `pos0 + t * pos_stride`."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tok * n_head * head_dim" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "n_rot", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "pos_stride", kind = "scalar", type = "u32" },
+  { name = "n_ctx_orig", kind = "scalar", type = "u32" },
+  { name = "inverse", kind = "scalar", type = "bool" },
+  { name = "freq_base", kind = "scalar", type = "f32" },
+  { name = "freq_scale", kind = "scalar", type = "f32" },
+  { name = "ext_factor", kind = "scalar", type = "f32" },
+  { name = "attn_factor", kind = "scalar", type = "f32" },
+  { name = "beta_fast", kind = "scalar", type = "f32" },
+  { name = "beta_slow", kind = "scalar", type = "f32" },
+]
+requires = ["n_rot <= head_dim", "n_rot % 2 == 0", "n_tok * n_head * (n_rot / 2) >= 1", "n_tok * n_head * (n_rot / 2) <= 4294967295"]
+probes = [
+  { n_tok = 3, n_head = 64, head_dim = 512, n_rot = 64, pos0 = 11, pos_stride = 1, n_ctx_orig = 65536, inverse = false, freq_base = 10000.0, freq_scale = 0.025, ext_factor = 1.0, attn_factor = 1.0, beta_fast = 32.0, beta_slow = 1.0 },
+]
+
+[[launcher]]
+name = "hc_weighted_sum"
+cpp = "HcWeightedSum"
+returns = "void"
+doc = "Each token's hyper-connection streams summed with its per-stream weights."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * n_embd" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * n_hc" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_embd >= 1", "n_hc >= 1", "n_tokens >= 1"]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "hc_split_weighted_sum"
+cpp = "HcSplitWeightedSum"
+returns = "void"
+doc = "The Sinkhorn split of each row's mix and the weighted sum of its four streams."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_rows * n_embd" },
+  { name = "split", kind = "out", elem = "f32", len = "n_rows * (2 * n_hc + n_hc * n_hc)" },
+  { name = "mix", kind = "in", elem = "f32", len = "n_rows * (2 * n_hc + n_hc * n_hc)" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_rows * n_hc * n_embd" },
+  { name = "scale", kind = "in", elem = "f32", len = "3" },
+  { name = "base", kind = "in", elem = "f32", len = "(2 * n_hc + n_hc * n_hc)" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+  { name = "sinkhorn_iters", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_embd >= 1", "n_hc == 4", "n_rows >= 1"]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_rows = 2, sinkhorn_iters = 20, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "hc_norm_mix_split_weighted_sum"
+cpp = "HcNormMixSplitWeightedSum"
+returns = "supported"
+doc = "The fused pre-block of 4 x 4096 rows with an F16 mix weight; unsupported for other widths or unaligned rows."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_rows * n_embd" },
+  { name = "mix", kind = "out", elem = "f32", len = "n_rows * 24" },
+  { name = "split", kind = "out", elem = "f32", len = "n_rows * 24" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_rows * 4 * n_embd" },
+  { name = "mix_w", kind = "in", elem = "f16", len = "24 * 4 * n_embd" },
+  { name = "scale", kind = "in", elem = "f32", len = "3" },
+  { name = "base", kind = "in", elem = "f32", len = "24" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+  { name = "sinkhorn_iters", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "norm_eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_rows >= 1"]
+probes = [
+  { n_embd = 4096, n_rows = 5, sinkhorn_iters = 20, eps = 1e-6, norm_eps = 1e-6 },
+]
+
+[[launcher]]
+name = "hc_split_weighted_sum_norm"
+cpp = "HcSplitWeightedSumNorm"
+returns = "void"
+doc = "hc_split_weighted_sum followed by an RMS norm with an F32 weight."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_rows * n_embd" },
+  { name = "norm_out", kind = "out", elem = "f32", len = "n_rows * n_embd" },
+  { name = "split", kind = "out", elem = "f32", len = "n_rows * (2 * n_hc + n_hc * n_hc)" },
+  { name = "mix", kind = "in", elem = "f32", len = "n_rows * (2 * n_hc + n_hc * n_hc)" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_rows * n_hc * n_embd" },
+  { name = "scale", kind = "in", elem = "f32", len = "3" },
+  { name = "base", kind = "in", elem = "f32", len = "(2 * n_hc + n_hc * n_hc)" },
+  { name = "norm_w", kind = "in", elem = "f32", len = "n_embd" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+  { name = "sinkhorn_iters", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "norm_eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_embd >= 1", "n_hc == 4", "n_rows >= 1"]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_rows = 3, sinkhorn_iters = 20, eps = 1e-6, norm_eps = 1e-6 },
+]
+
+[[launcher]]
+name = "output_hc_weights"
+cpp = "OutputHcWeights"
+returns = "void"
+doc = "The output head's per-stream weights from the pre-activations."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * n_hc" },
+  { name = "pre", kind = "in", elem = "f32", len = "n_tokens * n_hc" },
+  { name = "scale", kind = "in", elem = "f32", len = "1" },
+  { name = "base", kind = "in", elem = "f32", len = "n_hc" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_hc >= 1", "n_tokens >= 1"]
+probes = [
+  { n_hc = 4, n_tokens = 3, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "hc_expand_split"
+cpp = "HcExpandSplit"
+returns = "void"
+doc = "Each token's block output expanded into its hyper-connection streams with the split weights."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "block_out", kind = "in", elem = "f32", len = "n_tokens * n_embd" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "split", kind = "in", elem = "f32", len = "n_tokens * (2 * n_hc + n_hc * n_hc)" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_embd >= 1", "n_hc >= 1", "n_tokens >= 1", "(2 * n_hc + n_hc * n_hc) <= 4294967295"]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_tokens = 3 },
+  { n_embd = 64, n_hc = 2, n_tokens = 2 },
+]
+
+[[launcher]]
+name = "hc_expand_add_split"
+cpp = "HcExpandAddSplit"
+returns = "void"
+doc = "hc_expand_split of the sum of two block outputs."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "block_out", kind = "in", elem = "f32", len = "n_tokens * n_embd" },
+  { name = "block_add", kind = "in", elem = "f32", len = "n_tokens * n_embd" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "split", kind = "in", elem = "f32", len = "n_tokens * (2 * n_hc + n_hc * n_hc)" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_embd >= 1", "n_hc >= 1", "n_tokens >= 1", "(2 * n_hc + n_hc * n_hc) <= 4294967295"]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_tokens = 3 },
+  { n_embd = 64, n_hc = 2, n_tokens = 2 },
+]
+
+[[launcher]]
+name = "hc_expand_add_split_moesum"
+cpp = "HcExpandAddSplitMoesum"
+returns = "supported"
+doc = "hc_expand_add_split whose block output is the sum of the routed experts' F16 rows; unsupported unless four streams."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "down_h", kind = "in", elem = "f16", len = "n_tokens * n_expert * n_embd" },
+  { name = "block_add", kind = "in", elem = "f32", len = "n_tokens * n_embd" },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "split", kind = "in", elem = "f32", len = "n_tokens * (2 * n_hc + n_hc * n_hc)" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_expert", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+probes = [
+  { n_embd = 4096, n_hc = 4, n_expert = 6, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "spec_row_argmax"
+cpp = "SpecRowArgmax"
+returns = "void"
+doc = "The argmax of each of `n_rows` logit rows."
+params = [
+  { name = "out_index", kind = "out", elem = "i32", len = "n_rows" },
+  { name = "logits", kind = "in", elem = "f32", len = "n_rows * vocab" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+]
+requires = ["vocab >= 1", "n_rows >= 1"]
+probes = [
+  { vocab = 129280, n_rows = 3 },
+]
+
+[[launcher]]
+name = "dspark_capture_features"
+cpp = "DsparkCaptureFeatures"
+returns = "void"
+doc = "Each row's hyper-connection streams written into a slot of the DSpark feature rows."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_rows * out_row_stride" },
+  { name = "hc", kind = "in", elem = "f32", len = "n_rows * n_hc * n_embd" },
+  { name = "out_row_stride", kind = "scalar", type = "u32" },
+  { name = "slot_offset", kind = "scalar", type = "u32" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+]
+requires = ["n_embd >= 1", "n_hc >= 1", "n_rows >= 1", "slot_offset + n_embd <= out_row_stride"]
+probes = [
+  { out_row_stride = 16384, slot_offset = 4096, n_embd = 4096, n_hc = 4, n_rows = 2 },
+]
+
+
+[[launcher]]
+name = "embed_token_hc"
+cpp = "EmbedTokenHc"
+returns = "void"
+doc = "The F16 embedding row of `token` copied into every hyper-connection stream."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_hc * n_embd" },
+  { name = "w", kind = "in", elem = "f16", len = "n_vocab * n_embd" },
+  { name = "n_vocab", kind = "scalar", type = "u32" },
+  { name = "token", kind = "scalar", type = "u32" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+]
+requires = ["token < n_vocab", "n_embd >= 1", "n_hc >= 1", "n_embd * n_hc <= 4294967295"]
+probes = [
+  { n_vocab = 1024, token = 1023, n_embd = 4096, n_hc = 4 },
+]
+
+[[launcher]]
+name = "embed_tokens_hc"
+cpp = "EmbedTokensHc"
+returns = "void"
+doc = "embed_token_hc for a row of token IDs on the device, which the kernel checks against the vocabulary."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_tokens * n_hc * n_embd" },
+  { name = "tokens", kind = "in", elem = "i32", len = "n_tokens" },
+  { name = "w", kind = "in", elem = "f16", len = "n_vocab * n_embd" },
+  { name = "n_vocab", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+]
+requires = ["n_vocab >= 1", "n_tokens >= 1", "n_embd >= 1", "n_hc >= 1"]
+probes = [
+  { n_vocab = 1024, n_tokens = 3, n_embd = 4096, n_hc = 4 },
+]
+
+[[launcher]]
+name = "fp8_kv_quantize"
+cpp = "Fp8KvQuantize"
+returns = "void"
+doc = "The non-rotary part of each KV row rounded through FP8, in place."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tok * head_dim" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "n_rot", kind = "scalar", type = "u32" },
+]
+requires = ["n_rot <= head_dim"]
+probes = [
+  { n_tok = 3, head_dim = 512, n_rot = 64 },
+]
+
+[[launcher]]
+name = "fp8_kv_quantize_mirror_f16"
+cpp = "Fp8KvQuantizeMirrorF16"
+returns = "void"
+doc = "fp8_kv_quantize that also writes an F16 copy of each row."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tok * head_dim" },
+  { name = "mirror_f16", kind = "out", elem = "f16", len = "n_tok * head_dim" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "n_rot", kind = "scalar", type = "u32" },
+]
+requires = ["n_rot <= head_dim"]
+probes = [
+  { n_tok = 3, head_dim = 512, n_rot = 64 },
+]
+
+[[launcher]]
+name = "convert_f32_to_f16"
+cpp = "ConvertF32ToF16"
+returns = "void"
+doc = "`count` F32 values rounded to F16."
+params = [
+  { name = "dst", kind = "out", elem = "f16", len = "count" },
+  { name = "src", kind = "in", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 4096 },
+  { count = 1027 },
+]
+
+[[launcher]]
+name = "fill_f32"
+cpp = "FillF32"
+returns = "void"
+doc = "`count` values set to `value`."
+params = [
+  { name = "x", kind = "out", elem = "f32", len = "count" },
+  { name = "value", kind = "scalar", type = "f32" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { value = -1.0, count = 1000 },
+]
+
+[[launcher]]
+name = "swiglu"
+cpp = "Swiglu"
+returns = "void"
+doc = "silu(gate) times up, each clamped to `clamp`, times `weight`."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n" },
+  { name = "gate", kind = "in", elem = "f32", len = "n" },
+  { name = "up", kind = "in", elem = "f32", len = "n" },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "scalar", type = "f32" },
+]
+probes = [
+  { n = 2048, clamp = 10.0, weight = 1.0 },
+]
+
+[[launcher]]
+name = "store_raw_kv_batch"
+cpp = "StoreRawKvBatch"
+returns = "void"
+doc = "`n_tokens` KV rows stored into the raw window ring at positions from `pos0`."
+params = [
+  { name = "raw_cache", kind = "inout", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "kv", kind = "in", elem = "f32", len = "n_tokens * head_dim" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["raw_cap >= 1", "n_tokens >= 1", "head_dim >= 1"]
+probes = [
+  { raw_cap = 256, pos0 = 250, n_tokens = 12, head_dim = 512 },
+  { raw_cap = 384, pos0 = 7, n_tokens = 1, head_dim = 512 },
+]
+
+[[launcher]]
+name = "indexer_qat"
+cpp = "IndexerQat"
+returns = "void"
+doc = "The indexer's Hadamard rotation and FP4 rounding of 128-wide rows, in place."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_rows * head_dim" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_rows >= 1", "head_dim == 128"]
+probes = [
+  { n_rows = 64, head_dim = 128 },
+]
+
+[[launcher]]
+name = "dspark_candidates"
+cpp = "DsparkCandidates"
+returns = "void"
+doc = "The DSpark Markov candidates (68-byte records) of `requests` drafted positions, from their logits and hidden rows."
+params = [
+  { name = "out", kind = "out", elem = "bytes", len = "requests * 68" },
+  { name = "scratch", kind = "out", elem = "u64", len = "requests * ((vocab + 255) / 256) * 8" },
+  { name = "logits", kind = "in", elem = "f32", len = "(requests - 1) * logits_stride + vocab" },
+  { name = "logits_stride", kind = "scalar", type = "usize" },
+  { name = "hidden", kind = "in", elem = "f32", len = "(requests - 1) * hidden_stride + hidden_width" },
+  { name = "hidden_stride", kind = "scalar", type = "usize" },
+  { name = "previous", kind = "in", elem = "i32", len = "requests" },
+  { name = "w1", kind = "in", elem = "bytes", len = "vocab * (rank / 32) * 34" },
+  { name = "w2", kind = "in", elem = "bytes", len = "vocab * (rank / 32) * 34" },
+  { name = "confidence", kind = "in", elem = "bytes", len = "(hidden_width + rank) / 32 * 34" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+  { name = "hidden_width", kind = "scalar", type = "u32" },
+  { name = "requests", kind = "scalar", type = "u32" },
+]
+requires = ["vocab >= 1", "rank >= 32", "rank <= 256", "rank % 32 == 0", "hidden_width >= 32", "hidden_width % 32 == 0", "requests >= 1", "requests <= 8", "logits_stride >= vocab", "hidden_stride >= hidden_width"]
+probes = [
+  { logits_stride = 129280, hidden_stride = 4096, vocab = 129280, rank = 256, hidden_width = 4096, requests = 3 },
+]
+
+[[launcher]]
+name = "dspark_markov_argmax"
+cpp = "DsparkMarkovArgmax"
+returns = "void"
+doc = "The Markov-coupled argmax of one logit row, given the previous token's W1 row."
+params = [
+  { name = "out_index", kind = "out", elem = "i32", len = "1" },
+  { name = "scratch_key", kind = "out", elem = "u64", len = "1" },
+  { name = "logits_row", kind = "in", elem = "f32", len = "vocab" },
+  { name = "w1_row", kind = "in", elem = "bytes", len = "markov_rank / 32 * 34" },
+  { name = "w2", kind = "in", elem = "bytes", len = "vocab * (markov_rank / 32) * 34" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "markov_rank", kind = "scalar", type = "u32" },
+]
+requires = ["vocab >= 1", "markov_rank >= 32", "markov_rank <= 256", "markov_rank % 32 == 0"]
+probes = [
+  { vocab = 129280, markov_rank = 256 },
+]
+
+[[launcher]]
+name = "dspark_markov_argmax_batch"
+cpp = "DsparkMarkovArgmaxBatch"
+returns = "supported"
+doc = "dspark_markov_argmax of 2, 4, 6 or 8 rows `logits_row_stride` floats apart; unsupported for other row counts."
+params = [
+  { name = "out_index", kind = "out", elem = "i32", len = "n_rows" },
+  { name = "scratch_key", kind = "out", elem = "u64", len = "n_rows" },
+  { name = "logits_rows", kind = "in", elem = "f32", len = "(n_rows - 1) * logits_row_stride + vocab" },
+  { name = "logits_row_stride", kind = "scalar", type = "usize" },
+  { name = "previous_tokens", kind = "in", elem = "i32", len = "n_rows" },
+  { name = "w1", kind = "in", elem = "bytes", len = "vocab * (markov_rank / 32) * 34" },
+  { name = "w2", kind = "in", elem = "bytes", len = "vocab * (markov_rank / 32) * 34" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "markov_rank", kind = "scalar", type = "u32" },
+  { name = "n_rows", kind = "scalar", type = "u32" },
+]
+requires = ["vocab >= 1", "markov_rank >= 32", "markov_rank <= 256", "markov_rank % 32 == 0", "n_rows >= 1", "logits_row_stride >= vocab"]
+probes = [
+  { logits_row_stride = 129280, vocab = 129280, markov_rank = 256, n_rows = 4 },
+]
+
+[[launcher]]
+name = "attention_decode_heads"
+cpp = "AttentionDecodeHeads"
+returns = "void"
+doc = "One token's heads over `n_raw` rows of the raw window ring and `n_comp` compressed rows (the raw rows when there are none), optionally masked."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "comp_mask", kind = "in", elem = "f32", len = "n_comp", optional = true },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_raw >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "(n_raw + n_comp) * 4 <= 4294967295"]
+probes = [
+  { n_raw = 128, raw_cap = 384, raw_start = 300, n_comp = 1, n_head = 64, head_dim = 512 },
+  { n_raw = 128, raw_cap = 384, raw_start = 7, n_comp = 600, n_head = 64, head_dim = 512, with = ["comp_mask"] },
+]
+
+[[launcher]]
+name = "attention_noncausal_raw_batch_heads"
+cpp = "AttentionNoncausalRawBatchHeads"
+returns = "void"
+doc = "The heads of `n_tokens` DSpark rows over the same `n_raw` window rows, without a causal mask."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "head_dim >= 1", "n_raw >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "n_raw * 4 <= 32768"]
+probes = [
+  { n_tokens = 16, n_raw = 300, raw_cap = 384, raw_start = 100, n_head = 64, head_dim = 512 },
+]
+
+# The compressors. `coff` is 2 for ratio 4 and 1 otherwise, which
+# `coff == 1 + (4 / ratio) * (ratio / 4)` states for every ratio from 1; the
+# state holds `coff * ratio` rows of `coff * head_dim`.
+
+[[launcher]]
+name = "compressor_store"
+cpp = "CompressorStore"
+returns = "void"
+doc = "`n_tokens` positions from `pos0` into their state rows, the score with its positional bias."
+params = [
+  { name = "kv", kind = "in", elem = "f32", len = "n_tokens * coff * head_dim" },
+  { name = "sc", kind = "in", elem = "f32", len = "n_tokens * coff * head_dim" },
+  { name = "state_kv", kind = "out", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "state_score", kind = "out", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "ape", kind = "in", elem = "f16", len = "ratio * coff * head_dim" },
+  { name = "coff", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["ratio >= 1", "ratio <= 128", "coff == 1 + (4 / ratio) * (ratio / 4)", "head_dim >= 1", "n_tokens >= 1", "n_tokens * coff * head_dim <= 4294967295"]
+probes = [
+  { coff = 2, head_dim = 512, ratio = 4, pos0 = 6, n_tokens = 1 },
+  { coff = 1, head_dim = 512, ratio = 128, pos0 = 300, n_tokens = 1 },
+]
+
+[[launcher]]
+name = "compressor_state_reset"
+cpp = "CompressorStateReset"
+returns = "void"
+doc = "An empty state: zero values and scores of minus infinity."
+params = [
+  { name = "state_kv", kind = "out", elem = "f32", len = "count" },
+  { name = "state_score", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1", "count <= 4294967295"]
+probes = [
+  { count = 8192 },
+]
+
+[[launcher]]
+name = "compressor_set_rows"
+cpp = "CompressorSetRows"
+returns = "void"
+doc = "Positions `src0 ..` of a chunk from `pos0` into state rows `dst0 ..`, the score with its positional bias."
+params = [
+  { name = "state_kv", kind = "out", elem = "f32", len = "(dst0 + rows) * width" },
+  { name = "state_score", kind = "out", elem = "f32", len = "(dst0 + rows) * width" },
+  { name = "kv", kind = "in", elem = "f32", len = "(src0 + rows) * width" },
+  { name = "sc", kind = "in", elem = "f32", len = "(src0 + rows) * width" },
+  { name = "ape", kind = "in", elem = "f16", len = "ratio * width" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "src0", kind = "scalar", type = "u32" },
+  { name = "dst0", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+]
+requires = ["width >= 1", "ratio >= 1", "rows >= 1", "src0 + rows <= 4294967295", "dst0 + rows <= 4294967295", "rows * width <= 4294967295"]
+probes = [
+  { width = 1024, ratio = 4, pos0 = 8, src0 = 4, dst0 = 4, rows = 3 },
+  { width = 512, ratio = 128, pos0 = 0, src0 = 256, dst0 = 0, rows = 44 },
+]
+
+[[launcher]]
+name = "compressor_prefill_pool"
+cpp = "CompressorPrefillPool"
+returns = "void"
+doc = "The `n_comp` compressed rows of a chunk from `pos0`; ratio 4 overlaps each window with the previous one, which the first row takes from the state on `replay`."
+params = [
+  { name = "comp", kind = "out", elem = "f32", len = "n_comp * head_dim" },
+  { name = "kv", kind = "in", elem = "f32", len = "n_comp * ratio * coff * head_dim" },
+  { name = "sc", kind = "in", elem = "f32", len = "n_comp * ratio * coff * head_dim" },
+  { name = "state_kv", kind = "in", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "state_score", kind = "in", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "ape", kind = "in", elem = "f16", len = "ratio * coff * head_dim" },
+  { name = "coff", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "replay", kind = "scalar", type = "bool" },
+]
+requires = ["ratio >= 1", "ratio <= 128", "coff == 1 + (4 / ratio) * (ratio / 4)", "head_dim >= 1", "coff * head_dim <= 4294967295", "n_comp >= 1", "n_comp <= 65535", "n_comp * ratio <= 4294967295"]
+probes = [
+  { coff = 2, head_dim = 512, ratio = 4, pos0 = 8, n_comp = 5, replay = true },
+  { coff = 1, head_dim = 512, ratio = 128, pos0 = 128, n_comp = 2, replay = false },
+]
+
+[[launcher]]
+name = "compressor_update_pool"
+cpp = "CompressorUpdatePool"
+returns = "void"
+doc = "The compressed row of a full state."
+params = [
+  { name = "row", kind = "out", elem = "f32", len = "head_dim" },
+  { name = "state_kv", kind = "in", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "state_score", kind = "in", elem = "f32", len = "coff * ratio * coff * head_dim" },
+  { name = "coff", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+]
+requires = ["ratio >= 1", "ratio <= 128", "coff == 1 + (4 / ratio) * (ratio / 4)", "head_dim >= 1", "coff * head_dim <= 4294967295"]
+probes = [
+  { coff = 2, head_dim = 128, ratio = 4 },
+  { coff = 1, head_dim = 512, ratio = 128 },
+]
+
+[[launcher]]
+name = "compressor_shift_ratio4"
+cpp = "CompressorShiftRatio4"
+returns = "void"
+doc = "The ratio-4 state after an emitted row: the current window becomes the previous one."
+params = [
+  { name = "state_kv", kind = "inout", elem = "f32", len = "8 * width" },
+  { name = "state_score", kind = "inout", elem = "f32", len = "8 * width" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["width >= 1", "4 * width <= 4294967295"]
+probes = [
+  { width = 1024 },
+]
+
+[[launcher]]
+name = "matmul_f16_equal_group_pairs"
+cpp = "MatmulF16EqualGroupPairs"
+returns = "void"
+doc = "F16 projection of `2 * pairs` consecutive groups of `rows_per_group` rows; each block reads row `r` of both groups of a pair."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "2 * pairs * rows_per_group * out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "2 * pairs * rows_per_group * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "rows_per_group", kind = "scalar", type = "u32" },
+  { name = "pairs", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 4294967039", "out_dim >= 1", "out_dim <= 2147483647", "rows_per_group >= 1", "rows_per_group <= 6", "pairs >= 1", "pairs <= 4"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, rows_per_group = 3, pairs = 2 },
+  { in_dim = 16384, out_dim = 64, rows_per_group = 1, pairs = 4 },
+]
+
+[[launcher]]
+name = "matmul_f16_ragged_group_pair"
+cpp = "MatmulF16RaggedGroupPair"
+returns = "void"
+doc = "F16 projection of a group of `rows0` rows from `row0` and the next group of `rows1` rows, read together."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "(row0 + rows0 + rows1) * out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "(row0 + rows0 + rows1) * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "row0", kind = "scalar", type = "u32" },
+  { name = "rows0", kind = "scalar", type = "u32" },
+  { name = "rows1", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 4294967039", "out_dim >= 1", "out_dim <= 2147483647", "rows0 >= 1", "rows0 <= 6", "rows1 >= 1", "rows1 <= 6", "row0 + rows0 + rows1 <= 4294967295"]
+probes = [
+  { in_dim = 4096, out_dim = 512, row0 = 3, rows0 = 2, rows1 = 5 },
+  { in_dim = 16384, out_dim = 64, row0 = 0, rows0 = 4, rows1 = 1 },
+]
+
+[[launcher]]
+name = "matmul_f16_pair_narrow"
+cpp = "MatmulF16PairNarrow"
+returns = "void"
+doc = "Two F16 projections of the same 2 to 8 rows, each weight row read once for all of them."
+params = [
+  { name = "out0", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "out1", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w0", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "w1", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 4294967039", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 2", "n_tok <= 8"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, n_tok = 5 },
+]
+
+# Dense projections. A Q8_0 weight row is `(in_dim + 31) / 32` blocks of 34
+# bytes; pre-quantized activations (`xq`, `xscale`) hold the same blocks per
+# row, 32 int8 values and one F32 scale each.
+
+[[launcher]]
+name = "quantize_q8_rows"
+cpp = "QuantizeQ8Rows"
+returns = "void"
+doc = "`n_tok` activation rows as Q8_0 blocks, zero-padded past `in_dim`."
+params = [
+  { name = "xq", kind = "out", elem = "bytes", len = "n_tok * ((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "out", elem = "f32", len = "n_tok * ((in_dim + 31) / 32)" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 4096, n_tok = 3 },
+  { in_dim = 100, n_tok = 1 },
+]
+
+[[launcher]]
+name = "matmul_q8_wmma"
+cpp = "MatmulQ8Wmma"
+returns = "void"
+doc = "Q8_0 projection of prompt-width batches through 64x64 WMMA tiles."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "out_dim >= 1", "n_tok >= 1", "n_tok <= 4194240"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, n_tok = 300 },
+]
+
+[[launcher]]
+name = "matmul_q8_preq_reuse"
+cpp = "MatmulQ8PreqReuse"
+returns = "supported"
+doc = "Q8_0 projection of up to 16, or 18, 24 or 32, pre-quantized rows, each weight block read once for all of them in decode's order; unsupported for other counts."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tok * ((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "n_tok * ((in_dim + 31) / 32)" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+  { name = "rows_per_block", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "n_tok >= 1", "n_tok <= 32", "rows_per_block >= 1", "rows_per_block <= 2"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, n_tok = 2, rows_per_block = 2 },
+  { in_dim = 4096, out_dim = 512, n_tok = 11, rows_per_block = 1 },
+]
+
+[[launcher]]
+name = "matmul_q8_sharedx"
+cpp = "MatmulQ8Sharedx"
+returns = "void"
+doc = "Q8_0 projection of a batch whose activation tiles are staged in shared memory."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "out_dim >= 1", "out_dim <= 4294967264", "n_tok >= 1", "n_tok <= 2097120"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, n_tok = 3 },
+  { in_dim = 2048, out_dim = 4096, n_tok = 40 },
+]
+
+[[launcher]]
+name = "matmul_q8_warp8"
+cpp = "MatmulQ8Warp8"
+returns = "void"
+doc = "Q8_0 projection of a batch whose rows are not whole blocks."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 4294967288", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 100, out_dim = 64, n_tok = 3 },
+]
+
+[[launcher]]
+name = "matmul_q8_preq_rows"
+cpp = "MatmulQ8PreqRows"
+returns = "void"
+doc = "Q8_0 projection of one pre-quantized row, one warp per output row."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "(in_dim + 31) / 32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1"]
+probes = [
+  { in_dim = 4096, out_dim = 1024 },
+]
+
+[[launcher]]
+name = "matmul_q8_preq_all_rows"
+cpp = "MatmulQ8PreqAllRows"
+returns = "supported"
+doc = "Q8_0 projection of 6, 8, 12, 16, 18, 24 or 32 pre-quantized rows at once; unsupported for other counts."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tok * (in_dim / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "n_tok * (in_dim / 32)" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 32"]
+probes = [
+  { in_dim = 1024, out_dim = 512, n_tok = 12 },
+]
+
+[[launcher]]
+name = "matmul_q8_preq_equal_group_pairs"
+cpp = "MatmulQ8PreqEqualGroupPairs"
+returns = "void"
+doc = "Q8_0 projection of `2 * pairs` groups of `rows_per_group` pre-quantized rows, each pair read together."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "2 * pairs * rows_per_group * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "2 * pairs * rows_per_group * (in_dim / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "2 * pairs * rows_per_group * (in_dim / 32)" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "rows_per_group", kind = "scalar", type = "u32" },
+  { name = "pairs", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "out_dim >= 1", "out_dim <= 2147483647", "rows_per_group >= 1", "rows_per_group <= 6", "pairs >= 1", "pairs <= 4"]
+probes = [
+  { in_dim = 1024, out_dim = 512, rows_per_group = 5, pairs = 2 },
+]
+
+[[launcher]]
+name = "matmul_q8_preq_group_pair"
+cpp = "MatmulQ8PreqGroupPair"
+returns = "void"
+doc = "Q8_0 projection of a group of `rows0` pre-quantized rows from `row0` and the next group of `rows1` rows, read together."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "(row0 + rows0 + rows1) * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "(row0 + rows0 + rows1) * (in_dim / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "(row0 + rows0 + rows1) * (in_dim / 32)" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "row0", kind = "scalar", type = "u32" },
+  { name = "rows0", kind = "scalar", type = "u32" },
+  { name = "rows1", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "out_dim >= 1", "out_dim <= 2147483647", "rows0 >= 1", "rows0 <= 6", "rows1 >= 1", "rows1 <= 6", "row0 + rows0 + rows1 <= 4294967295"]
+probes = [
+  { in_dim = 1024, out_dim = 512, row0 = 2, rows0 = 3, rows1 = 3 },
+  { in_dim = 1024, out_dim = 512, row0 = 0, rows0 = 6, rows1 = 1 },
+]
+
+[[launcher]]
+name = "matmul_q8_pair_preq_reuse"
+cpp = "MatmulQ8PairPreqReuse"
+returns = "void"
+doc = "Two Q8_0 projections of the same pre-quantized rows, four rows per launch."
+params = [
+  { name = "out0", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "out1", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w0", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "w1", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tok * ((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "n_tok * ((in_dim + 31) / 32)" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 4096, out_dim = 2048, n_tok = 6 },
+]
+
+[[launcher]]
+name = "matmul_q8_pair_preq_rows"
+cpp = "MatmulQ8PairPreqRows"
+returns = "void"
+doc = "Two Q8_0 projections of one pre-quantized row."
+params = [
+  { name = "out0", kind = "out", elem = "f32", len = "out0_dim" },
+  { name = "out1", kind = "out", elem = "f32", len = "out1_dim" },
+  { name = "w0", kind = "in", elem = "bytes", len = "out0_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "w1", kind = "in", elem = "bytes", len = "out1_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "(in_dim + 31) / 32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out0_dim", kind = "scalar", type = "u32" },
+  { name = "out1_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out0_dim >= 1", "out1_dim >= 1", "out0_dim <= 4294967288", "out1_dim <= 4294967288"]
+probes = [
+  { in_dim = 4096, out0_dim = 2048, out1_dim = 1024 },
+]
+
+[[launcher]]
+name = "matmul_q8_hc_expand_preq_rows"
+cpp = "MatmulQ8HcExpandPreqRows"
+returns = "void"
+doc = "A Q8_0 projection of one pre-quantized row into the block output (plus an optional block), expanded into the hyper-connection streams."
+params = [
+  { name = "out_hc", kind = "out", elem = "f32", len = "n_hc * n_embd" },
+  { name = "block_out", kind = "out", elem = "f32", len = "n_embd" },
+  { name = "block_add", kind = "in", elem = "f32", len = "n_embd", optional = true },
+  { name = "residual_hc", kind = "in", elem = "f32", len = "n_hc * n_embd" },
+  { name = "split", kind = "in", elem = "f32", len = "2 * n_hc + n_hc * n_hc" },
+  { name = "w", kind = "in", elem = "bytes", len = "n_embd * ((in_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "((in_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "(in_dim + 31) / 32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "n_embd", kind = "scalar", type = "u32" },
+  { name = "n_hc", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "n_embd >= 1", "n_embd <= 4294967280", "n_hc >= 1"]
+probes = [
+  { in_dim = 2048, n_embd = 4096, n_hc = 4 },
+  { in_dim = 2048, n_embd = 4096, n_hc = 4, with = ["block_add"] },
+]
+
+[[launcher]]
+name = "dequant_q8_to_f16"
+cpp = "DequantQ8ToF16"
+returns = "void"
+doc = "A Q8_0 weight expanded to F16 rows of `in_dim` values."
+params = [
+  { name = "out", kind = "out", elem = "f16", len = "out_dim * in_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1"]
+probes = [
+  { in_dim = 2048, out_dim = 4096 },
+]
+
+[[launcher]]
+name = "mmq_q8_dense"
+cpp = "MmqQ8Dense"
+returns = "supported"
+doc = "Q8_0 projection of a prompt-width batch through the vendored MMQ tier; unsupported where MMQ declines the shape."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * (in_dim / 32) * 34" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 32", "in_dim % 32 == 0", "in_dim <= 2147483647", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 2147483647", "n_tok * out_dim <= 2147483647"]
+probes = [
+  { in_dim = 4096, out_dim = 1024, n_tok = 64 },
+]
+
+[[launcher]]
+name = "matmul_f16_tiny_batch"
+cpp = "MatmulF16TinyBatch"
+returns = "void"
+doc = "F16 projection of a few rows, one wave per output, with the activations rounded to F16 (the DSpark support router)."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 4294967263", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 16384, out_dim = 24, n_tok = 6 },
+]
+
+[[launcher]]
+name = "matmul_f16_ordered_reuse"
+cpp = "MatmulF16OrderedReuse"
+returns = "void"
+doc = "F16 projection of 1 to 6 rows in decode's chunked order, each weight row read once for all of them."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 6"]
+probes = [
+  { in_dim = 16384, out_dim = 24, n_tok = 4 },
+  { in_dim = 4096, out_dim = 256, n_tok = 1 },
+]
+
+[[launcher]]
+name = "matmul_f16_sharedx_rows"
+cpp = "MatmulF16SharedxRows"
+returns = "void"
+doc = "F16 projection of one row staged in shared memory, one warp per output row."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 8192", "out_dim >= 1", "out_dim <= 4294967264"]
+probes = [
+  { in_dim = 4096, out_dim = 1024 },
+]
+
+[[launcher]]
+name = "matmul_f16_ordered_chunks"
+cpp = "MatmulF16OrderedChunks"
+returns = "void"
+doc = "F16 projection in decode's chunked order, one wave per output."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 9000, out_dim = 64, n_tok = 1 },
+]
+
+[[launcher]]
+name = "matmul_f16_pair_sharedx_rows"
+cpp = "MatmulF16PairSharedxRows"
+returns = "void"
+doc = "Two F16 projections of one row staged in shared memory."
+params = [
+  { name = "out0", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "out1", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "w0", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "w1", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "in_dim <= 8192", "out_dim >= 1", "out_dim <= 4294967264"]
+probes = [
+  { in_dim = 4096, out_dim = 1024 },
+]
+
+[[launcher]]
+name = "matmul_f16_pair_ordered_chunks"
+cpp = "MatmulF16PairOrderedChunks"
+returns = "void"
+doc = "Two F16 projections of one row in decode's chunked order."
+params = [
+  { name = "out0", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "out1", kind = "out", elem = "f32", len = "out_dim" },
+  { name = "w0", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "w1", kind = "in", elem = "f16", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 2147483647"]
+probes = [
+  { in_dim = 16384, out_dim = 64 },
+]
+
+[[launcher]]
+name = "matmul_f32_plain"
+cpp = "MatmulF32Plain"
+returns = "void"
+doc = "F32 projection, one block per output."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tok * out_dim" },
+  { name = "w", kind = "in", elem = "f32", len = "out_dim * in_dim" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tok * in_dim" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tok", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 2147483647", "n_tok >= 1", "n_tok <= 65535"]
+probes = [
+  { in_dim = 4096, out_dim = 4, n_tok = 1 },
+]
+
+# Attention. Heads and queries are `n_tokens` rows of `n_head * head_dim`;
+# the raw ring holds `raw_cap` rows of `head_dim`, the compressed cache
+# `n_comp` (absent compressed rows pass the raw rows with `n_comp = 0`);
+# masks are `n_tokens` rows of `n_comp`, top-k lists `n_tokens` rows of
+# `top_k` indices, which the kernels skip outside the visible rows. Every
+# kernel bounds its raw rows to 256 and its score tables itself, except
+# where `requires` says.
+
+[[launcher]]
+name = "attention_decode_online"
+cpp = "AttentionDecodeOnline"
+returns = "void"
+doc = "Causal heads of `n_tokens` rows from `pos0` over the raw ring and the compressed rows, eight heads per block with an online softmax."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 524280", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap"]
+probes = [
+  { n_tokens = 3, pos0 = 500, n_raw = 128, raw_cap = 384, raw_start = 7, n_comp = 120, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_mixed_wmma"
+cpp = "AttentionMixedWmma"
+returns = "void"
+doc = "attention_decode_online for prompt chunks through wave32 rocWMMA, 32 heads per block, with Q and KV converted to F16."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 32", "n_head % 32 == 0", "n_head <= 2097120", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap"]
+probes = [
+  { n_tokens = 100, pos0 = 0, n_raw = 100, raw_cap = 100, raw_start = 0, n_comp = 25, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_indexed_wmma"
+cpp = "AttentionIndexedWmma"
+returns = "void"
+doc = "Heads over the raw ring and the top-k compressed rows through wave32 rocWMMA, 32 heads per block."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "topk", kind = "in", elem = "i32", len = "n_tokens * top_k" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 32", "n_head % 32 == 0", "n_head <= 2097120", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "top_k >= 1"]
+probes = [
+  { n_tokens = 130, pos0 = 4000, n_raw = 130, raw_cap = 384, raw_start = 9, n_comp = 1000, top_k = 512, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_indexed_wmma_f16"
+cpp = "AttentionIndexedWmmaF16"
+returns = "void"
+doc = "attention_indexed_wmma over the F16 mirror of the compressed rows."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f16", len = "n_comp * head_dim" },
+  { name = "topk", kind = "in", elem = "i32", len = "n_tokens * top_k" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 32", "n_head % 32 == 0", "n_head <= 2097120", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "top_k >= 1"]
+probes = [
+  { n_tokens = 130, pos0 = 4000, n_raw = 130, raw_cap = 384, raw_start = 9, n_comp = 1000, top_k = 512, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_decode_mixed"
+cpp = "AttentionDecodeMixed"
+returns = "void"
+doc = "attention_decode_online, one block per head, with an optional additive mask of the compressed rows."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "comp_mask", kind = "in", elem = "f32", len = "n_tokens * n_comp", optional = true },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+# The score table holds 256 raw and 7936 compressed rows.
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 65535", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "n_comp <= 7936"]
+probes = [
+  { n_tokens = 3, pos0 = 500, n_raw = 128, raw_cap = 384, raw_start = 7, n_comp = 120, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+  { n_tokens = 3, pos0 = 500, n_raw = 128, raw_cap = 384, raw_start = 7, n_comp = 120, window = 128, ratio = 4, n_head = 64, head_dim = 512, with = ["comp_mask"] },
+]
+
+[[launcher]]
+name = "attention_decode_indexed_one"
+cpp = "AttentionDecodeIndexedOne"
+returns = "void"
+doc = "One token's heads over `n_raw` rows of the ring from `raw_start` and its top-k compressed rows."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_head * head_dim" },
+  { name = "q", kind = "in", elem = "f32", len = "n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "topk", kind = "in", elem = "i32", len = "top_k" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+# The shared score buffer holds `n_raw + min(top_k, n_comp)` rows, and
+# repeated indices count once each: `top_k <= n_comp` keeps them inside.
+requires = ["n_head >= 1", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "top_k <= n_comp", "(n_raw + top_k) * 4 <= 4294967295"]
+probes = [
+  { n_raw = 128, raw_cap = 384, raw_start = 300, n_comp = 900, top_k = 512, pos = 3999, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "indexed_topk_sort_512"
+cpp = "IndexedTopkSort512"
+returns = "void"
+doc = "Each row of 512 top-k indices sorted ascending."
+params = [
+  { name = "dst", kind = "out", elem = "i32", len = "n_tokens * 512" },
+  { name = "src", kind = "in", elem = "i32", len = "n_tokens * 512" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1"]
+probes = [
+  { n_tokens = 9 },
+]
+
+[[launcher]]
+name = "attention_indexed_online"
+cpp = "AttentionIndexedOnline"
+returns = "void"
+doc = "Heads over the raw ring and the top-k compressed rows with an online softmax, 32 heads per block up to 64 heads, else 16."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "topk", kind = "in", elem = "i32", len = "n_tokens * top_k" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 1048560", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "top_k >= 1"]
+probes = [
+  { n_tokens = 20, pos0 = 4000, n_raw = 128, raw_cap = 384, raw_start = 9, n_comp = 1000, top_k = 300, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_indexed_mixed"
+cpp = "AttentionIndexedMixed"
+returns = "void"
+doc = "attention_indexed_online, one block per head, for any head width."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "raw_cap * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "topk", kind = "in", elem = "i32", len = "n_tokens * top_k" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_raw", kind = "scalar", type = "u32" },
+  { name = "raw_cap", kind = "scalar", type = "u32" },
+  { name = "raw_start", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 65535", "head_dim >= 1", "raw_cap >= 1", "n_raw <= raw_cap", "raw_start < raw_cap", "top_k >= 1"]
+probes = [
+  { n_tokens = 2, pos0 = 4000, n_raw = 128, raw_cap = 384, raw_start = 9, n_comp = 1000, top_k = 300, window = 128, ratio = 4, n_head = 64, head_dim = 256 },
+]
+
+[[launcher]]
+name = "attention_static_online"
+cpp = "AttentionStaticOnline"
+returns = "void"
+doc = "Causal heads of a chunk from position 0 over its own raw rows and the compressed rows, eight heads per block with an online softmax."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "n_tokens * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 524280", "head_dim >= 1"]
+probes = [
+  { n_tokens = 40, n_comp = 10, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_prefill_raw_softmax"
+cpp = "AttentionPrefillRawSoftmax"
+returns = "void"
+doc = "The causal window softmax with sinks of per-head score rows `[head][token][key]`, in place."
+params = [
+  { name = "scores", kind = "inout", elem = "f32", len = "n_head * n_tokens * n_keys" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "n_keys", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_keys >= n_tokens", "n_head >= 1", "n_head <= 65535"]
+probes = [
+  { n_tokens = 20, window = 0, n_keys = 20, n_head = 64 },
+]
+
+[[launcher]]
+name = "attention_prefill_unpack_heads"
+cpp = "AttentionPrefillUnpackHeads"
+returns = "void"
+doc = "Per-head outputs `[head][token][dim]` into token rows of heads."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "tmp", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "head_dim >= 1"]
+probes = [
+  { n_tokens = 5, n_head = 64, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_prefill_raw"
+cpp = "AttentionPrefillRaw"
+returns = "supported"
+doc = "Causal heads of a chunk over its own raw rows, one block per head; unsupported beyond 256 visible rows."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "n_tokens * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 65535", "head_dim >= 1"]
+probes = [
+  { n_tokens = 20, window = 0, n_head = 64, head_dim = 128 },
+]
+
+[[launcher]]
+name = "attention_prefill_pack_mixed_kv"
+cpp = "AttentionPrefillPackMixedKv"
+returns = "void"
+doc = "A chunk's raw rows followed by the compressed rows, as one key matrix."
+params = [
+  { name = "dst", kind = "out", elem = "f32", len = "(n_tokens + n_comp) * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "n_tokens * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "head_dim >= 1", "n_tokens + n_comp <= 4294967295"]
+probes = [
+  { n_tokens = 30, n_comp = 7, head_dim = 512 },
+]
+
+[[launcher]]
+name = "attention_prefill_mixed_softmax"
+cpp = "AttentionPrefillMixedSoftmax"
+returns = "void"
+doc = "The causal window and compressed-row softmax with sinks of per-head score rows over the packed keys, in place."
+params = [
+  { name = "scores", kind = "inout", elem = "f32", len = "n_head * n_tokens * n_keys" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "comp_mask", kind = "in", elem = "f32", len = "n_tokens * n_comp", optional = true },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_keys", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_keys == n_tokens + n_comp", "n_head >= 1", "n_head <= 65535"]
+probes = [
+  { n_tokens = 30, n_comp = 7, window = 128, ratio = 4, n_keys = 37, n_head = 64 },
+  { n_tokens = 30, n_comp = 7, window = 128, ratio = 4, n_keys = 37, n_head = 64, with = ["comp_mask"] },
+]
+
+[[launcher]]
+name = "attention_prefill_mixed_softmax_tile"
+cpp = "AttentionPrefillMixedSoftmaxTile"
+returns = "void"
+doc = "attention_prefill_mixed_softmax of `tile_tokens` rows from `tile_start` of a chunk of `raw_tokens`."
+params = [
+  { name = "scores", kind = "inout", elem = "f32", len = "n_head * tile_tokens * n_keys" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "comp_mask", kind = "in", elem = "f32", len = "raw_tokens * n_comp", optional = true },
+  { name = "raw_tokens", kind = "scalar", type = "u32" },
+  { name = "tile_start", kind = "scalar", type = "u32" },
+  { name = "tile_tokens", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_keys", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+]
+requires = ["tile_tokens >= 1", "tile_start + tile_tokens <= raw_tokens", "n_keys == raw_tokens + n_comp", "n_head >= 1", "n_head <= 65535"]
+probes = [
+  { raw_tokens = 30, tile_start = 16, tile_tokens = 14, n_comp = 7, window = 128, ratio = 4, n_keys = 37, n_head = 64 },
+]
+
+[[launcher]]
+name = "attention_prefill_mixed"
+cpp = "AttentionPrefillMixed"
+returns = "void"
+doc = "Causal heads of a chunk over its own raw rows and the compressed rows, one block per head, all scores in F32."
+params = [
+  { name = "heads", kind = "out", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "sinks", kind = "in", elem = "f32", len = "n_head" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "raw_kv", kind = "in", elem = "f32", len = "n_tokens * head_dim" },
+  { name = "comp_kv", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "comp_mask", kind = "in", elem = "f32", len = "n_tokens * n_comp", optional = true },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_head >= 1", "n_head <= 65535", "head_dim >= 1"]
+probes = [
+  { n_tokens = 30, n_comp = 7, window = 128, ratio = 4, n_head = 64, head_dim = 512 },
+]
+
+# The attention output projection. A maps each of `n_groups` groups of heads
+# (`group_dim` values per token) through grouped Q8_0 rows to a block of
+# `rank` values; the `n_groups * rank` low values go through B.
+
+[[launcher]]
+name = "attn_out_a_preq_reuse"
+cpp = "AttnOutAPreqReuse"
+returns = "supported"
+doc = "The A projection of 2 to 8, 10, 12, 16, 18, 24 or 32 pre-quantized token rows, each weight block read once for all of them in decode's order; unsupported for other counts."
+params = [
+  { name = "low", kind = "out", elem = "f32", len = "n_tokens * n_groups * rank" },
+  { name = "w", kind = "in", elem = "bytes", len = "n_groups * rank * (group_dim / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * n_groups * (group_dim / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "n_tokens * n_groups * (group_dim / 32)" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "rows_per_block", kind = "scalar", type = "u32" },
+]
+requires = ["group_dim >= 32", "group_dim % 32 == 0", "rank >= 1", "n_groups >= 1", "n_tokens >= 1", "n_tokens <= 32", "rows_per_block >= 1", "rows_per_block <= 8"]
+probes = [
+  { group_dim = 4096, rank = 1024, n_groups = 8, n_tokens = 5, rows_per_block = 4 },
+]
+
+[[launcher]]
+name = "attn_out_a_sharedx"
+cpp = "AttnOutASharedx"
+returns = "void"
+doc = "The A projection of a batch whose activation tiles are staged in shared memory."
+params = [
+  { name = "low", kind = "out", elem = "f32", len = "n_tokens * n_groups * rank" },
+  { name = "w", kind = "in", elem = "bytes", len = "n_groups * rank * (group_dim / 32) * 34" },
+  { name = "heads", kind = "in", elem = "f32", len = "n_tokens * n_groups * group_dim" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["group_dim >= 32", "group_dim % 32 == 0", "rank >= 1", "n_groups >= 1", "n_tokens >= 1", "n_tokens <= 2097120"]
+probes = [
+  { group_dim = 4096, rank = 1024, n_groups = 8, n_tokens = 20 },
+]
+
+[[launcher]]
+name = "attn_out_a_warp8"
+cpp = "AttnOutAWarp8"
+returns = "void"
+doc = "The A projection of a batch whose groups are not whole blocks."
+params = [
+  { name = "low", kind = "out", elem = "f32", len = "n_tokens * n_groups * rank" },
+  { name = "w", kind = "in", elem = "bytes", len = "n_groups * rank * ((group_dim + 31) / 32) * 34" },
+  { name = "heads", kind = "in", elem = "f32", len = "n_tokens * n_groups * group_dim" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["group_dim >= 1", "rank >= 1", "n_groups >= 1", "n_tokens >= 1", "n_tokens <= 65535"]
+probes = [
+  { group_dim = 100, rank = 64, n_groups = 4, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "attn_out_a_preq_warp8"
+cpp = "AttnOutAPreqWarp8"
+returns = "void"
+doc = "The A projection of pre-quantized token rows, one warp per low row, `rows_per_block` rows per block."
+params = [
+  { name = "low", kind = "out", elem = "f32", len = "n_tokens * n_groups * rank" },
+  { name = "w", kind = "in", elem = "bytes", len = "n_groups * rank * ((group_dim + 31) / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * n_groups * ((group_dim + 31) / 32) * 32" },
+  { name = "xscale", kind = "in", elem = "f32", len = "n_tokens * n_groups * ((group_dim + 31) / 32)" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "rows_per_block", kind = "scalar", type = "u32" },
+]
+requires = ["group_dim >= 1", "rank >= 1", "n_groups >= 1", "n_tokens >= 1", "n_tokens <= 65535", "rows_per_block >= 1", "rows_per_block <= 32"]
+probes = [
+  { group_dim = 4096, rank = 1024, n_groups = 8, n_tokens = 1, rows_per_block = 32 },
+  { group_dim = 4096, rank = 1024, n_groups = 8, n_tokens = 3, rows_per_block = 8 },
+]
+
+[[launcher]]
+name = "pack_group_heads_f16"
+cpp = "PackGroupHeadsF16"
+returns = "void"
+doc = "Token rows of grouped heads repacked group-major (`[group][token][dim]`) as F16."
+params = [
+  { name = "dst", kind = "out", elem = "f16", len = "n_groups * n_tokens * group_dim" },
+  { name = "heads", kind = "in", elem = "f32", len = "n_tokens * n_groups * group_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_groups >= 1", "group_dim >= 1"]
+probes = [
+  { n_tokens = 3, n_groups = 8, group_dim = 4096 },
+]
+
+[[launcher]]
+name = "pack_group_heads_rope_f16"
+cpp = "PackGroupHeadsRopeF16"
+returns = "supported"
+doc = "pack_group_heads_f16 with the inverse rotary embedding of each head's tail applied on the way; unsupported where rotated pairs would straddle the four-value vectors."
+params = [
+  { name = "dst", kind = "out", elem = "f16", len = "n_groups * n_tokens * group_dim" },
+  { name = "heads", kind = "in", elem = "f32", len = "n_tokens * n_groups * group_dim" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "group_dim", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "n_rot", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_ctx_orig", kind = "scalar", type = "u32" },
+  { name = "freq_base", kind = "scalar", type = "f32" },
+  { name = "freq_scale", kind = "scalar", type = "f32" },
+  { name = "ext_factor", kind = "scalar", type = "f32" },
+  { name = "attn_factor", kind = "scalar", type = "f32" },
+  { name = "beta_fast", kind = "scalar", type = "f32" },
+  { name = "beta_slow", kind = "scalar", type = "f32" },
+]
+requires = ["n_tokens >= 1", "n_groups >= 1", "group_dim >= 1"]
+probes = [
+  { n_tokens = 3, n_groups = 8, group_dim = 4096, head_dim = 512, n_rot = 64, pos0 = 7, n_ctx_orig = 65536, freq_base = 10000.0, freq_scale = 0.025, ext_factor = 1.0, attn_factor = 1.0, beta_fast = 32.0, beta_slow = 1.0 },
+]
+
+[[launcher]]
+name = "attn_unpack_group_low"
+cpp = "AttnUnpackGroupLow"
+returns = "void"
+doc = "Group-major low values (`[group][token][rank]`) into token rows."
+params = [
+  { name = "low", kind = "out", elem = "f32", len = "n_tokens * n_groups * rank" },
+  { name = "packed", kind = "in", elem = "f32", len = "n_groups * n_tokens * rank" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "n_groups", kind = "scalar", type = "u32" },
+  { name = "rank", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "n_groups >= 1", "rank >= 1"]
+probes = [
+  { n_tokens = 3, n_groups = 8, rank = 1024 },
+]
+
+[[launcher]]
+name = "dequant_q8_to_f16_transposed"
+cpp = "DequantQ8ToF16Transposed"
+returns = "void"
+doc = "A Q8_0 weight expanded to F16 and transposed: `in_dim` rows of `out_dim` values."
+params = [
+  { name = "out", kind = "out", elem = "f16", len = "in_dim * out_dim" },
+  { name = "w", kind = "in", elem = "bytes", len = "out_dim * ((in_dim + 31) / 32) * 34" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 1", "out_dim >= 1", "out_dim <= 4294967231"]
+probes = [
+  { in_dim = 8192, out_dim = 4096 },
+]
+
+[[launcher]]
+name = "gemm_f16_wmma_batched"
+cpp = "GemmF16WmmaBatched"
+returns = "void"
+doc = "`batches` F16 products of a 128-row row-major weight and `n` activation rows each, through 128x128 WMMA tiles; output `b` starts `b * m` values in, columns `ldc` apart."
+params = [
+  { name = "out", kind = "out", elem = "f16", len = "(n - 1) * ldc + batches * m" },
+  { name = "weight", kind = "in", elem = "f16", len = "batches * m * k" },
+  { name = "act", kind = "in", elem = "f16", len = "batches * n * k" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "n", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "ldc", kind = "scalar", type = "u32" },
+  { name = "batches", kind = "scalar", type = "u32" },
+]
+requires = ["m == 128", "n >= 128", "n % 128 == 0", "k >= 32", "k % 32 == 0", "batches >= 1", "batches <= 65535", "ldc >= batches * m"]
+probes = [
+  { m = 128, n = 256, k = 512, ldc = 1024, batches = 8 },
+]
+
+[[launcher]]
+name = "gemm_f16_wmma_padded"
+cpp = "GemmF16WmmaPadded"
+returns = "void"
+doc = "An F16 product of a column-major `m x k` weight and `n_pad` activation rows through 128x128 WMMA tiles, 256x128 from 1,024 columns."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_pad * m" },
+  { name = "weight", kind = "in", elem = "f16", len = "m * k" },
+  { name = "act", kind = "in", elem = "f16", len = "n_pad * k" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "n_pad", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 128", "m % 128 == 0", "n_pad >= 128", "n_pad % 128 == 0", "k >= 32", "k % 32 == 0"]
+probes = [
+  { m = 512, n_pad = 256, k = 1024 },
+  { m = 512, n_pad = 1024, k = 256 },
+]
+
+[[launcher]]
+name = "zero_bytes"
+cpp = "ZeroBytes"
+returns = "void"
+doc = "`count` zero bytes, in stream order."
+params = [
+  { name = "x", kind = "out", elem = "bytes", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1"]
+probes = [
+  { count = 4096 },
+]
+
+[[launcher]]
+name = "indexer_score_direct"
+cpp = "IndexerScoreDirect"
+returns = "void"
+doc = "Indexer scores of `n_tokens` rows from `pos0` against `n_comp` keys, 64 heads of width 128, one block per score; causal at compression `ratio` when `causal`."
+params = [
+  { name = "scores", kind = "out", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * 8192" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 64" },
+  { name = "index_comp", kind = "in", elem = "f32", len = "n_comp * 128" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "causal", kind = "scalar", type = "bool" },
+]
+requires = ["n_comp >= 1", "n_tokens >= 1", "n_tokens <= 65535", "ratio >= 1"]
+probes = [
+  { n_comp = 300, n_tokens = 1, pos0 = 0, ratio = 1, scale = 0.01, causal = false },
+  { n_comp = 300, n_tokens = 5, pos0 = 1190, ratio = 4, scale = 0.01, causal = true },
+]
+
+[[launcher]]
+name = "indexer_pack_keys"
+cpp = "IndexerPackKeys"
+returns = "void"
+doc = "`count` indexer keys as F16, zero-padded to whole 128-key tiles."
+params = [
+  { name = "packed", kind = "out", elem = "f16", len = "(count + 127) / 128 * 16384" },
+  { name = "keys", kind = "in", elem = "f32", len = "count * 128" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["count >= 1", "count <= 16777216"]
+probes = [
+  { count = 300 },
+]
+
+[[launcher]]
+name = "indexer_pack_queries"
+cpp = "IndexerPackQueries"
+returns = "void"
+doc = "`tokens` rows of 64 indexer query heads as F16 WMMA operands, 16 rows per tile."
+params = [
+  { name = "packed", kind = "out", elem = "f16", len = "(tokens + 15) / 16 * 131072" },
+  { name = "q", kind = "in", elem = "f32", len = "tokens * 8192" },
+  { name = "tokens", kind = "scalar", type = "u32" },
+]
+requires = ["tokens >= 1", "tokens <= 1048560"]
+probes = [
+  { tokens = 37 },
+]
+
+[[launcher]]
+name = "indexer_scores_wmma_packed"
+cpp = "IndexerScoresWmmaPacked"
+returns = "void"
+doc = "Indexer scores through WMMA from packed F16 queries and keys (`indexer_pack_queries`, `indexer_pack_keys`)."
+params = [
+  { name = "scores", kind = "out", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "queries", kind = "in", elem = "f16", len = "(n_tokens + 15) / 16 * 131072" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 64" },
+  { name = "keys", kind = "in", elem = "f16", len = "(n_comp + 127) / 128 * 16384" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "causal", kind = "scalar", type = "bool" },
+]
+requires = ["n_comp >= 1", "n_tokens >= 1", "n_tokens <= 1048560", "ratio >= 1"]
+probes = [
+  { n_comp = 300, n_tokens = 37, pos0 = 0, ratio = 4, scale = 0.01, causal = true },
+]
+
+[[launcher]]
+name = "indexer_scores_wmma"
+cpp = "IndexerScoresWmma"
+returns = "void"
+doc = "Indexer scores through WMMA, staging the F32 queries and keys in shared memory."
+params = [
+  { name = "scores", kind = "out", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * 8192" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 64" },
+  { name = "index_comp", kind = "in", elem = "f32", len = "n_comp * 128" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "causal", kind = "scalar", type = "bool" },
+]
+requires = ["n_comp >= 1", "n_tokens >= 1", "n_tokens <= 1048560", "ratio >= 1"]
+probes = [
+  { n_comp = 300, n_tokens = 37, pos0 = 0, ratio = 4, scale = 0.01, causal = true },
+]
+
+[[launcher]]
+name = "indexer_scores"
+cpp = "IndexerScores"
+returns = "void"
+doc = "Indexer scores of any head count and width, one block per score."
+params = [
+  { name = "scores", kind = "out", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * n_head * head_dim" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * n_head" },
+  { name = "index_comp", kind = "in", elem = "f32", len = "n_comp * head_dim" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "pos0", kind = "scalar", type = "u32" },
+  { name = "n_head", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "ratio", kind = "scalar", type = "u32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "causal", kind = "scalar", type = "bool" },
+]
+requires = ["n_comp >= 1", "n_tokens >= 1", "n_tokens <= 65535", "n_head >= 1", "head_dim >= 1", "ratio >= 1"]
+probes = [
+  { n_comp = 70, n_tokens = 3, pos0 = 8, n_head = 8, head_dim = 64, ratio = 4, scale = 0.01, causal = true },
+]
+
+[[launcher]]
+name = "indexer_topk_partial"
+cpp = "IndexerTopkPartial"
+returns = "void"
+doc = "The 512 best of `n_comp` scores per row by exact radix selection."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * 512" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp >= 1025", "n_comp <= 32768", "n_tokens >= 1"]
+probes = [
+  { n_comp = 2000, n_tokens = 3 },
+  { n_comp = 12000, n_tokens = 2 },
+  { n_comp = 30000, n_tokens = 2 },
+]
+
+[[launcher]]
+name = "indexer_topk_1024"
+cpp = "IndexerTopk1024"
+returns = "void"
+doc = "The `top_k` best of at most 1,024 scores per row by a bitonic sort."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp <= 1024", "n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 700, n_tokens = 3, top_k = 512 },
+]
+
+[[launcher]]
+name = "indexer_topk_2048"
+cpp = "IndexerTopk2048"
+returns = "void"
+doc = "The `top_k` best of at most 2,048 scores per row by a bitonic sort."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp <= 2048", "n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 1500, n_tokens = 2, top_k = 1024 },
+]
+
+[[launcher]]
+name = "indexer_topk_4096"
+cpp = "IndexerTopk4096"
+returns = "void"
+doc = "The `top_k` best of at most 4,096 scores per row by a bitonic sort."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp <= 4096", "n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 3000, n_tokens = 2, top_k = 2048 },
+]
+
+[[launcher]]
+name = "indexer_topk_8192"
+cpp = "IndexerTopk8192"
+returns = "void"
+doc = "The `top_k` best of at most 8,192 scores per row by a bitonic sort over 16-bit indices."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp <= 8192", "n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 6000, n_tokens = 2, top_k = 1024 },
+]
+
+[[launcher]]
+name = "indexer_topk_8192_cub"
+cpp = "IndexerTopk8192Cub"
+returns = "supported"
+doc = "The `top_k` best of at most 8,192 scores per row by a block radix sort; unsupported without the opt-in shared memory."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp <= 8192", "n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 6000, n_tokens = 2, top_k = 2048 },
+]
+
+[[launcher]]
+name = "indexer_topk_chunk"
+cpp = "IndexerTopkChunk"
+returns = "void"
+doc = "The `top_k` best of every 4,096-score chunk of a row, `candidate_stride` indices per row."
+params = [
+  { name = "candidates", kind = "out", elem = "i32", len = "n_tokens * candidate_stride" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "candidate_stride", kind = "scalar", type = "u32" },
+]
+requires = ["n_comp >= 1", "n_comp <= 268431360", "n_tokens >= 1", "top_k >= 1", "top_k <= 4096", "(n_comp + 4095) / 4096 * top_k <= candidate_stride"]
+probes = [
+  { n_comp = 40000, n_tokens = 2, top_k = 512, candidate_stride = 5120 },
+]
+
+[[launcher]]
+name = "indexer_topk_tree_merge"
+cpp = "IndexerTopkTreeMerge"
+returns = "void"
+doc = "Merges groups of `merge_group` candidate sets of `top_k` indices into one set each."
+params = [
+  { name = "out", kind = "out", elem = "i32", len = "n_tokens * out_stride" },
+  { name = "candidates", kind = "in", elem = "i32", len = "n_tokens * candidate_stride" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "n_sets", kind = "scalar", type = "u32" },
+  { name = "merge_group", kind = "scalar", type = "u32" },
+  { name = "candidate_stride", kind = "scalar", type = "u32" },
+  { name = "out_stride", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "top_k >= 1", "top_k <= 4096", "n_sets >= 1", "merge_group >= 1", "(n_sets + merge_group - 1) / merge_group <= 65535", "n_sets * top_k <= candidate_stride", "(n_sets + merge_group - 1) / merge_group * top_k <= out_stride"]
+probes = [
+  { n_comp = 200000, n_tokens = 2, top_k = 512, n_sets = 49, merge_group = 8, candidate_stride = 25088, out_stride = 3584 },
+]
+
+[[launcher]]
+name = "indexer_topk_merge"
+cpp = "IndexerTopkMerge"
+returns = "void"
+doc = "The `top_k` best of `candidate_count` candidate indices per row."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "candidates", kind = "in", elem = "i32", len = "n_tokens * candidate_stride" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+  { name = "candidate_count", kind = "scalar", type = "u32" },
+  { name = "candidate_stride", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "top_k >= 1", "top_k <= 4096", "candidate_count <= candidate_stride"]
+probes = [
+  { n_comp = 40000, n_tokens = 2, top_k = 512, candidate_count = 4096, candidate_stride = 5120 },
+]
+
+[[launcher]]
+name = "indexer_topk_serial"
+cpp = "IndexerTopkSerial"
+returns = "void"
+doc = "The `top_k` best scores per row by one thread's insertion sort."
+params = [
+  { name = "selected", kind = "out", elem = "i32", len = "n_tokens * top_k" },
+  { name = "scores", kind = "in", elem = "f32", len = "n_tokens * n_comp" },
+  { name = "n_comp", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "top_k", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "top_k >= 1", "top_k <= n_comp"]
+probes = [
+  { n_comp = 100, n_tokens = 2, top_k = 7 },
+]
+
+[[launcher]]
+name = "router_select"
+cpp = "RouterSelect"
+returns = "void"
+doc = "Six experts and their weights per row from 256 router logits (`probs` receives the probabilities): a top-k with an optional bias (padding for rows of NaN scores), or the `hash` row of the token (`tokens`, else `token`). Trusted: every hash entry is an expert (the engine checks the tables at load)."
+params = [
+  { name = "selected", kind = "indices_out", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "out", elem = "f32", len = "n_tokens * 6" },
+  { name = "probs", kind = "out", elem = "f32", len = "n_tokens * 256" },
+  { name = "bias", kind = "in", elem = "f32", len = "256", optional = true },
+  { name = "hash", kind = "in", elem = "i32", len = "hash_rows * 6", optional = true },
+  { name = "logits", kind = "in", elem = "f32", len = "n_tokens * 256" },
+  { name = "tokens", kind = "in", elem = "i32", len = "n_tokens", optional = true },
+  { name = "token", kind = "scalar", type = "u32" },
+  { name = "hash_rows", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["n_tokens >= 1", "hash_rows >= 1"]
+probes = [
+  { token = 0, hash_rows = 1, n_tokens = 1 },
+  { token = 0, hash_rows = 1, n_tokens = 6, with = ["bias"] },
+  { token = 0, hash_rows = 50, n_tokens = 6, with = ["hash", "tokens"] },
+]
+
+# --- Routed experts ------------------------------------------------------------
+# The route plan (counts, offsets, the pairs sorted by expert and the expert
+# tiles) derives from one generation of the selection; a kernel that reads
+# `sorted[offsets[e] + r]` for `r < counts[e]` relies on the three agreeing,
+# which the derivation guarantees. Plan buffers hold `rows_cap * 6` pairs
+# whatever the call uses, so pair values stay below that capacity.
+
+[[launcher]]
+name = "moe_quantize_q8k"
+cpp = "MoeQuantizeQ8K"
+returns = "void"
+doc = "`rows` rows of `dim` floats as Q8_K blocks (292 bytes per 256 values)."
+params = [
+  { name = "xq", kind = "out", elem = "bytes", len = "rows * (dim / 256) * 292" },
+  { name = "x", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+]
+requires = ["dim >= 256", "dim % 256 == 0", "rows >= 1", "rows <= 65535"]
+probes = [
+  { dim = 4096, rows = 3 },
+]
+
+[[launcher]]
+name = "moe_route_plan"
+cpp = "MoeRoutePlan"
+returns = "void"
+doc = "The route plan of `n_tokens` rows of six experts: per-expert counts and offsets, the pairs sorted by expert (ascending within one), and tiles of `1 << tile_shift` pairs."
+params = [
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices_out", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices_out", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "cursors", kind = "out", elem = "i32", len = "256" },
+  { name = "sorted", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "tile_offsets", kind = "out", elem = "i32", len = "257" },
+  { name = "tile_total", kind = "indices_out", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices_out", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["n_tokens >= 1", "n_tokens <= rows_cap", "rows_cap <= 2796202", "tile_shift >= 2", "tile_shift <= 4"]
+probes = [
+  { n_tokens = 130, tile_shift = 3, rows_cap = 200 },
+]
+
+[[launcher]]
+name = "moe_route_plan_narrow"
+cpp = "MoeRoutePlanNarrow"
+returns = "void"
+doc = "`moe_route_plan` in one block for at most 48 pairs."
+params = [
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices_out", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices_out", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "tile_offsets", kind = "out", elem = "i32", len = "257" },
+  { name = "tile_total", kind = "indices_out", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices_out", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["n_tokens >= 1", "n_tokens <= 8", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 4"]
+probes = [
+  { n_tokens = 7, tile_shift = 2, rows_cap = 136 },
+]
+
+[[launcher]]
+name = "moe_route_tiles"
+cpp = "MoeRouteTiles"
+returns = "void"
+doc = "A second tiling of a route plan, `1 << tile_shift` pairs per tile."
+params = [
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_offsets", kind = "out", elem = "i32", len = "257" },
+  { name = "tile_total", kind = "indices_out", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices_out", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 4"]
+probes = [
+  { n_tokens = 130, tile_shift = 4, rows_cap = 200, counts = 0 },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_lut"
+cpp = "MoeIq2GateUpLut"
+returns = "void"
+doc = "Routed IQ2_XXS gate and up, SwiGLU, clamp and router weight per (row, expert) pair from Q8_K rows held in shared memory (at most 4,096 inputs)."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim <= 4096", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, n_tokens = 2, clamp = 10.0 },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_qwarp"
+cpp = "MoeIq2GateUpQwarp"
+returns = "void"
+doc = "`moe_iq2_gate_up_lut` for any width, also storing the clamped gate and up."
+params = [
+  { name = "gate", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "up", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { in_dim = 8192, mid_dim = 512, n_tokens = 2, clamp = 0.0 },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_tiles"
+cpp = "MoeIq2GateUpTiles"
+returns = "void"
+doc = "Routed IQ2_XXS gate/up over the expert tiles of a route plan (4 or 8 pairs, 32 rows per block); experts with `max_count` or more pairs are left to the hot list."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "rows_cap * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "max_count", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 3", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, tile_shift = 3, tile_cap = 20, max_count = 0, clamp = 10.0, n_tokens = 10, rows_cap = 16 },
+  { in_dim = 4096, mid_dim = 512, tile_shift = 2, tile_cap = 20, max_count = 8, clamp = 10.0, n_tokens = 10, rows_cap = 16 },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_tiles_wide"
+cpp = "MoeIq2GateUpTilesWide"
+returns = "void"
+doc = "`moe_iq2_gate_up_tiles` eight pairs per tile and 1,024 rows per block; over a plan of four-pair tiles it computes every pair twice, alike."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "rows_cap * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "max_count", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "tile_shift", kind = "scalar", type = "u32", contract_only = true },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 3", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { in_dim = 4096, mid_dim = 2048, tile_cap = 120, max_count = 4, clamp = 10.0, tile_shift = 3, n_tokens = 128, rows_cap = 128 },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_hot"
+cpp = "MoeIq2GateUpHot"
+returns = "void"
+doc = "Routed IQ2_XXS gate/up of the hot experts (`hot_experts[..hot_count]`) on the F16 WMMA cores, F32 mid rows; from F16 inputs when `half_x` is given."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "x", kind = "in", elem = "f32", len = "rows_cap * in_dim" },
+  { name = "half_x", kind = "in", elem = "f16", len = "rows_cap * in_dim", optional = true },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "hot_experts", kind = "indices", len = "256", below = "256" },
+  { name = "hot_count", kind = "scalar", type = "u32" },
+  { name = "hot_max", kind = "scalar", type = "u32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 16", "mid_dim % 16 == 0", "n_tokens >= 1", "n_tokens <= rows_cap", "hot_count >= 1", "hot_count <= 256", "hot_max >= 1", "hot_max <= 4194240"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, hot_count = 3, hot_max = 40, clamp = 10.0, n_tokens = 20, rows_cap = 32 },
+  { in_dim = 4096, mid_dim = 512, hot_count = 3, hot_max = 40, clamp = 10.0, n_tokens = 20, rows_cap = 32, with = ["half_x"] },
+]
+
+[[launcher]]
+name = "moe_iq2_gate_up_hot_f16"
+cpp = "MoeIq2GateUpHotF16"
+returns = "void"
+doc = "`moe_iq2_gate_up_hot` writing F16 mid rows."
+params = [
+  { name = "mid_h", kind = "out", elem = "f16", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "x", kind = "in", elem = "f32", len = "rows_cap * in_dim" },
+  { name = "half_x", kind = "in", elem = "f16", len = "rows_cap * in_dim", optional = true },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "hot_experts", kind = "indices", len = "256", below = "256" },
+  { name = "hot_count", kind = "scalar", type = "u32" },
+  { name = "hot_max", kind = "scalar", type = "u32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 16", "mid_dim % 16 == 0", "n_tokens >= 1", "n_tokens <= rows_cap", "hot_count >= 1", "hot_count <= 256", "hot_max >= 1", "hot_max <= 4194240"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, hot_count = 3, hot_max = 40, clamp = 10.0, n_tokens = 20, rows_cap = 32, with = ["half_x"] },
+]
+
+[[launcher]]
+name = "moe_iq2_mmq_gate_up_swiglu"
+cpp = "MoeIq2MmqGateUpSwiglu"
+returns = "supported"
+doc = "Routed IQ2_XXS gate/up through the vendored MMQ tier with SwiGLU, clamp and router weight in its epilogue, into F32 and F16 mid rows (`discard` is not written); Q8_1 inputs go to `q81_scratch` when it holds them. `max_rows` bounds the expert buckets and `tile_cols` picks the column tile (0: the tier's own rule); both shape the grid only."
+params = [
+  { name = "gate", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "discard", kind = "out", elem = "f32", len = "1" },
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "mid_h", kind = "out", elem = "f16", len = "n_tokens * 6 * mid_dim" },
+  { name = "q81_scratch", kind = "out", elem = "bytes", len = "q81_bytes" },
+  { name = "q81_bytes", kind = "scalar", type = "usize" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * in_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "max_rows", kind = "scalar", type = "u32" },
+  { name = "tile_cols", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens * 6 * mid_dim <= 2147483647", "max_rows <= 2147483647", "tile_cols <= 2147483647"]
+probes = [
+  { q81_bytes = 0, in_dim = 4096, mid_dim = 512, n_tokens = 64, max_rows = 0, tile_cols = 0, clamp = 10.0 },
+]
+
+[[launcher]]
+name = "moe_iq2_mmq_gate_up"
+cpp = "MoeIq2MmqGateUp"
+returns = "supported"
+doc = "Routed IQ2_XXS gate/up through the vendored MMQ tier into pair-major F32 gate and up rows; scratch and bounds as in `moe_iq2_mmq_gate_up_swiglu`."
+params = [
+  { name = "gate", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "up", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "q81_scratch", kind = "out", elem = "bytes", len = "q81_bytes" },
+  { name = "q81_bytes", kind = "scalar", type = "usize" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 66" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * in_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "max_rows", kind = "scalar", type = "u32" },
+  { name = "tile_cols", kind = "scalar", type = "u32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens * 6 * mid_dim <= 2147483647", "max_rows <= 2147483647", "tile_cols <= 2147483647"]
+probes = [
+  { q81_bytes = 0, in_dim = 4096, mid_dim = 512, n_tokens = 64, max_rows = 0, tile_cols = 0 },
+]
+
+[[launcher]]
+name = "moe_mmq_swiglu"
+cpp = "MoeMmqSwiglu"
+returns = "void"
+doc = "SwiGLU of pair-major gate and up rows with clamp and router weight, into F32 mid rows and, when given, an F16 copy."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "mid_h", kind = "out", elem = "f16", len = "n_tokens * 6 * mid_dim", optional = true },
+  { name = "gate", kind = "in", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "up", kind = "in", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["mid_dim >= 1", "n_tokens >= 1", "n_tokens * 6 * mid_dim <= 1099511562240"]
+probes = [
+  { mid_dim = 512, n_tokens = 3, clamp = 10.0 },
+  { mid_dim = 512, n_tokens = 3, clamp = 10.0, with = ["mid_h"] },
+]
+
+[[launcher]]
+name = "moe_q2_down_sum6"
+cpp = "MoeQ2DownSum6"
+returns = "void"
+doc = "Routed Q2_K down of each row's six experts from Q8_K mid rows, summed into the row."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "midq", kind = "in", elem = "bytes", len = "n_tokens * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "moe_q2_down_tiles"
+cpp = "MoeQ2DownTiles"
+returns = "void"
+doc = "Routed Q2_K down over the expert tiles of a route plan into pair-major rows (32 rows per block, 2,048 when `wide`)."
+params = [
+  { name = "down", kind = "out", elem = "f32", len = "rows_cap * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "midq", kind = "in", elem = "bytes", len = "rows_cap * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "wide", kind = "scalar", type = "bool" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 4", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, tile_shift = 3, tile_cap = 20, wide = false, n_tokens = 10, rows_cap = 16 },
+]
+
+[[launcher]]
+name = "moe_q2_down_tiles_atomic"
+cpp = "MoeQ2DownTilesAtomic"
+returns = "void"
+doc = "`moe_q2_down_tiles` adding each pair into its token row of `out`, which the caller zeroes."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "rows_cap * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "midq", kind = "in", elem = "bytes", len = "rows_cap * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "wide", kind = "scalar", type = "bool" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 4", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, tile_shift = 4, tile_cap = 30, wide = true, n_tokens = 130, rows_cap = 130 },
+]
+
+[[launcher]]
+name = "moe_sum"
+cpp = "MoeSum"
+returns = "void"
+doc = "Each row's six pair-major F32 expert rows summed."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * out_dim" },
+  { name = "down", kind = "in", elem = "f32", len = "n_tokens * 6 * out_dim" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["out_dim >= 1", "n_tokens >= 1", "n_tokens * out_dim <= 1099511562240"]
+probes = [
+  { out_dim = 4096, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "moe_sum_f16"
+cpp = "MoeSumF16"
+returns = "void"
+doc = "Each row's six pair-major F16 expert rows summed (pairs of columns at even widths)."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * out_dim" },
+  { name = "down_h", kind = "in", elem = "f16", len = "n_tokens * 6 * out_dim" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["out_dim >= 1", "n_tokens >= 1", "n_tokens * out_dim <= 1099511562240"]
+probes = [
+  { out_dim = 4096, n_tokens = 3 },
+  { out_dim = 4095, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "moe_q2_down_batch"
+cpp = "MoeQ2DownBatch"
+returns = "void"
+doc = "Routed Q2_K down of the listed experts with `min_count` to `max_count` pairs (no upper bound at 0), `1 << pair_shift` pairs per staged mid tile, `rows_per_block` output rows per block, into pair-major F32 rows."
+params = [
+  { name = "down", kind = "out", elem = "f32", len = "rows_cap * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "mid", kind = "in", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "experts", kind = "indices", len = "n_experts", below = "256" },
+  { name = "n_experts", kind = "scalar", type = "u32" },
+  { name = "pair_shift", kind = "scalar", type = "u32" },
+  { name = "rows_per_block", kind = "scalar", type = "u32" },
+  { name = "min_count", kind = "scalar", type = "u32" },
+  { name = "max_count", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "n_experts >= 1", "n_experts <= 65535", "pair_shift <= 2", "rows_per_block >= 1", "rows_per_block <= 32"]
+probes = [
+  { n_experts = 5, pair_shift = 0, rows_per_block = 32, min_count = 1, max_count = 2, mid_dim = 512, out_dim = 4096, n_tokens = 10, rows_cap = 16 },
+  { n_experts = 5, pair_shift = 2, rows_per_block = 16, min_count = 2, max_count = 0, mid_dim = 512, out_dim = 4096, n_tokens = 10, rows_cap = 16 },
+]
+
+[[launcher]]
+name = "moe_q2_down_batch_f16"
+cpp = "MoeQ2DownBatchF16"
+returns = "void"
+doc = "`moe_q2_down_batch` into pair-major F16 rows."
+params = [
+  { name = "down_h", kind = "out", elem = "f16", len = "rows_cap * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "mid", kind = "in", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "experts", kind = "indices", len = "n_experts", below = "256" },
+  { name = "n_experts", kind = "scalar", type = "u32" },
+  { name = "pair_shift", kind = "scalar", type = "u32" },
+  { name = "rows_per_block", kind = "scalar", type = "u32" },
+  { name = "min_count", kind = "scalar", type = "u32" },
+  { name = "max_count", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "n_experts >= 1", "n_experts <= 65535", "pair_shift <= 2", "rows_per_block >= 1", "rows_per_block <= 32"]
+probes = [
+  { n_experts = 5, pair_shift = 1, rows_per_block = 16, min_count = 2, max_count = 4, mid_dim = 512, out_dim = 4096, n_tokens = 10, rows_cap = 16 },
+]
+
+[[launcher]]
+name = "moe_q2_down_hot_wide"
+cpp = "MoeQ2DownHotWide"
+returns = "void"
+doc = "Routed Q2_K down of the hot experts on the F16 WMMA cores, four column fragments wide, from F16 mid rows into F16 down rows; `mtiles` row tiles of 16 per block, over the (hot expert, row group) list of `tile_map` when given."
+params = [
+  { name = "down_h", kind = "out", elem = "f16", len = "rows_cap * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "mid_h", kind = "in", elem = "f16", len = "rows_cap * 6 * mid_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "hot_experts", kind = "indices", len = "256", below = "256" },
+  { name = "hot_count", kind = "scalar", type = "u32" },
+  { name = "tile_map", kind = "in", elem = "u32", len = "n_map", optional = true },
+  { name = "n_map", kind = "scalar", type = "u32" },
+  { name = "hot_max", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "mtiles", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 64", "out_dim % 64 == 0", "n_tokens >= 1", "n_tokens <= rows_cap", "hot_count >= 1", "hot_count <= 256", "n_map <= 65535", "hot_max >= 1", "hot_max <= 1048560", "mtiles >= 2", "mtiles <= 8", "mtiles % 2 == 0"]
+probes = [
+  { hot_count = 3, n_map = 0, hot_max = 40, mid_dim = 512, out_dim = 4096, mtiles = 2, n_tokens = 20, rows_cap = 32 },
+  { hot_count = 3, n_map = 5, hot_max = 40, mid_dim = 512, out_dim = 4096, mtiles = 8, n_tokens = 20, rows_cap = 32, with = ["tile_map"] },
+]
+
+[[launcher]]
+name = "moe_q2_down_hot"
+cpp = "MoeQ2DownHot"
+returns = "supported"
+doc = "Routed Q2_K down of the hot experts on the F16 WMMA cores, two column fragments wide and `mtiles` row tiles of 16 per block (4 or 8), from F32 or F16 mid rows into F32 or F16 down rows (one of each; unsupported otherwise)."
+params = [
+  { name = "down", kind = "out", elem = "f32", len = "rows_cap * 6 * out_dim", optional = true },
+  { name = "down_h", kind = "out", elem = "f16", len = "rows_cap * 6 * out_dim", optional = true },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "mid", kind = "in", elem = "f32", len = "rows_cap * 6 * mid_dim", optional = true },
+  { name = "mid_h", kind = "in", elem = "f16", len = "rows_cap * 6 * mid_dim", optional = true },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "hot_experts", kind = "indices", len = "256", below = "256" },
+  { name = "hot_count", kind = "scalar", type = "u32" },
+  { name = "hot_max", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "mtiles", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 16", "out_dim % 16 == 0", "n_tokens >= 1", "n_tokens <= rows_cap", "hot_count >= 1", "hot_count <= 256", "hot_max >= 1", "hot_max <= 4194240", "mtiles >= 4", "mtiles <= 8"]
+probes = [
+  { hot_count = 3, hot_max = 40, mid_dim = 512, out_dim = 4096, mtiles = 4, n_tokens = 20, rows_cap = 32, with = ["down_h", "mid_h"] },
+  { hot_count = 3, hot_max = 40, mid_dim = 512, out_dim = 4096, mtiles = 8, n_tokens = 20, rows_cap = 32, with = ["down", "mid"] },
+]
+
+[[launcher]]
+name = "moe_route_sort"
+cpp = "MoeRouteSort"
+returns = "void"
+doc = "The counts, offsets and expert-sorted pairs of a route plan, without tiles."
+params = [
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices_out", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices_out", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "cursors", kind = "out", elem = "i32", len = "256" },
+  { name = "sorted", kind = "indices_out", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["n_tokens >= 1", "n_tokens <= rows_cap", "rows_cap <= 2796202"]
+probes = [
+  { n_tokens = 40, rows_cap = 64 },
+]
+
+[[launcher]]
+name = "moe_q4k_gate_up_tiles"
+cpp = "MoeQ4kGateUpTiles"
+returns = "void"
+doc = "Routed Q4_K gate/up over the expert tiles of a route plan (4 or 8 pairs, 32 rows per block)."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 144" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 144" },
+  { name = "xq", kind = "in", elem = "bytes", len = "rows_cap * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 3", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, tile_shift = 3, tile_cap = 40, clamp = 10.0, n_tokens = 40, rows_cap = 64 },
+]
+
+[[launcher]]
+name = "moe_q4k_gate_up_decode"
+cpp = "MoeQ4kGateUpDecode"
+returns = "void"
+doc = "Routed Q4_K gate/up, SwiGLU, clamp and router weight per (row, expert) pair."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 144" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 144" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, n_tokens = 3, clamp = 10.0 },
+]
+
+[[launcher]]
+name = "moe_q4k_down_sum6"
+cpp = "MoeQ4kDownSum6"
+returns = "void"
+doc = "Routed Q4_K down of each row's six experts from Q8_K mid rows, summed into the row."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 144" },
+  { name = "midq", kind = "in", elem = "bytes", len = "n_tokens * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "moe_q4k_down_tiles"
+cpp = "MoeQ4kDownTiles"
+returns = "void"
+doc = "Routed Q4_K down over the expert tiles of a route plan into pair-major rows."
+params = [
+  { name = "down", kind = "out", elem = "f32", len = "rows_cap * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 144" },
+  { name = "midq", kind = "in", elem = "bytes", len = "rows_cap * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 3", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, tile_shift = 3, tile_cap = 40, n_tokens = 40, rows_cap = 64 },
+]
+
+[[launcher]]
+name = "moe_q4k_down_tiles_atomic"
+cpp = "MoeQ4kDownTilesAtomic"
+returns = "void"
+doc = "`moe_q4k_down_tiles` adding each pair into its token row of `out`, which the caller zeroes."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "rows_cap * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 144" },
+  { name = "midq", kind = "in", elem = "bytes", len = "rows_cap * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "tile_total", kind = "indices", len = "1", below = "rows_cap * 6 + 1", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_experts", kind = "indices", len = "rows_cap * 6", below = "256", derived_from = "selected", tag = "tile_shift" },
+  { name = "tile_starts", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected", tag = "tile_shift" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "tile_shift", kind = "scalar", type = "u32" },
+  { name = "tile_cap", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap", "tile_shift >= 2", "tile_shift <= 3", "tile_cap >= 1", "tile_cap <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, tile_shift = 3, tile_cap = 200, n_tokens = 130, rows_cap = 130 },
+]
+
+[[launcher]]
+name = "moe_q4k_down_decode"
+cpp = "MoeQ4kDownDecode"
+returns = "void"
+doc = "Routed Q4_K down per (row, expert) pair from Q8_K mid rows into pair-major rows."
+params = [
+  { name = "down", kind = "out", elem = "f32", len = "n_tokens * 6 * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 144" },
+  { name = "midq", kind = "in", elem = "bytes", len = "n_tokens * 6 * (mid_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "moe_q2k_gate_up_batch"
+cpp = "MoeQ2kGateUpBatch"
+returns = "void"
+doc = "Routed Q2_K gate/up of every expert with fewer than `max_count` pairs (no bound at 0), four pairs per staged input tile, into pair-major mid rows."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "x", kind = "in", elem = "f32", len = "rows_cap * in_dim" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "max_count", kind = "scalar", type = "u32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= rows_cap"]
+probes = [
+  { max_count = 8, in_dim = 4096, mid_dim = 512, clamp = 10.0, n_tokens = 40, rows_cap = 64 },
+]
+
+[[launcher]]
+name = "moe_q2k_gate_up_hot"
+cpp = "MoeQ2kGateUpHot"
+returns = "void"
+doc = "Routed Q2_K gate/up of the hot experts on the F16 WMMA cores from F16 inputs into F16 mid rows, `mtiles` row tiles of 16 per block (4 or 8)."
+params = [
+  { name = "mid_h", kind = "out", elem = "f16", len = "rows_cap * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "x", kind = "in", elem = "f32", len = "rows_cap * in_dim" },
+  { name = "half_x", kind = "in", elem = "f16", len = "rows_cap * in_dim" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows_cap * 6" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "counts", kind = "indices", len = "256", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "offsets", kind = "indices", len = "257", below = "rows_cap * 6 + 1", derived_from = "selected" },
+  { name = "sorted", kind = "indices", len = "rows_cap * 6", below = "rows_cap * 6", derived_from = "selected" },
+  { name = "hot_experts", kind = "indices", len = "256", below = "256" },
+  { name = "hot_count", kind = "scalar", type = "u32" },
+  { name = "hot_max", kind = "scalar", type = "u32" },
+  { name = "mtiles", kind = "scalar", type = "u32" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+  { name = "n_tokens", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows_cap", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 16", "mid_dim % 16 == 0", "n_tokens >= 1", "n_tokens <= rows_cap", "hot_count >= 1", "hot_count <= 256", "hot_max >= 1", "hot_max <= 4194240", "mtiles >= 4", "mtiles <= 8"]
+probes = [
+  { hot_count = 3, hot_max = 40, mtiles = 4, in_dim = 4096, mid_dim = 512, clamp = 10.0, n_tokens = 40, rows_cap = 64 },
+  { hot_count = 3, hot_max = 100, mtiles = 8, in_dim = 4096, mid_dim = 512, clamp = 10.0, n_tokens = 40, rows_cap = 64 },
+]
+
+[[launcher]]
+name = "moe_q2k_gate_up_decode"
+cpp = "MoeQ2kGateUpDecode"
+returns = "void"
+doc = "Routed Q2_K gate/up per (row, expert) pair from Q8_K rows."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n_tokens * (in_dim / 256) * 292" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, n_tokens = 1, clamp = 10.0 },
+]
+
+[[launcher]]
+name = "moe_q2k_gate_up_rows"
+cpp = "MoeQ2kGateUpRows"
+returns = "void"
+doc = "Routed Q2_K gate/up per (row, expert) pair and output row, one wave each, from F32 inputs."
+params = [
+  { name = "mid", kind = "out", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "gate_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "up_w", kind = "in", elem = "bytes", len = "256 * mid_dim * (in_dim / 256) * 84" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * in_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * 6" },
+  { name = "in_dim", kind = "scalar", type = "u32" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "clamp", kind = "scalar", type = "f32" },
+]
+requires = ["in_dim >= 256", "in_dim % 256 == 0", "mid_dim >= 1", "n_tokens >= 1", "n_tokens <= 10922"]
+probes = [
+  { in_dim = 4096, mid_dim = 512, n_tokens = 3, clamp = 10.0 },
+]
+
+[[launcher]]
+name = "moe_q2k_down_rows"
+cpp = "MoeQ2kDownRows"
+returns = "void"
+doc = "Routed Q2_K down of each row's six experts from F32 mid rows, summed, one wave per output value."
+params = [
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * out_dim" },
+  { name = "down_w", kind = "in", elem = "bytes", len = "256 * out_dim * (mid_dim / 256) * 84" },
+  { name = "mid", kind = "in", elem = "f32", len = "n_tokens * 6 * mid_dim" },
+  { name = "selected", kind = "indices", signed = true, padded = true, len = "n_tokens * 6", below = "256" },
+  { name = "mid_dim", kind = "scalar", type = "u32" },
+  { name = "out_dim", kind = "scalar", type = "u32" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+]
+requires = ["mid_dim >= 256", "mid_dim % 256 == 0", "out_dim >= 1", "n_tokens >= 1", "n_tokens <= 65535"]
+probes = [
+  { mid_dim = 512, out_dim = 4096, n_tokens = 3 },
+]
+
+[[launcher]]
+name = "mmq_init"
+cpp = "MmqInit"
+returns = "supported"
+doc = "Initialises the vendored MMQ tier on device 0 (`ds4_mmq_init`); unsupported when it finds no device. Idempotent."
+params = []
+probes = [
+  {},
+]
+
+[[launcher]]
+name = "mmq_release"
+cpp = "MmqRelease"
+returns = "void"
+doc = "Frees the vendored MMQ tier's process-wide scratch after waiting for the device (`ds4_mmq_cleanup`); its next use allocates it again."
+params = []
+probes = [
+  {},
+]

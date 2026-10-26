@@ -55,7 +55,7 @@ one JSON per table (and per mode for concurrency tables) into
 `<!-- bench:<table> -->` markers in `BENCHMARKS.md`:
 
 ```sh
-nix build   # production Gufo binary at result/bin/gufo
+cargo build --release -p gufo   # production binary target/release/gufo
 FILES="--gguf q4=/path/to/target-q4.gguf --draft q4=/path/to/draft-q4.gguf"
 nix develop -c python3 tools/bench/model-bench.py --model <model> tables            # ids and existing artifacts
 nix develop -c python3 tools/bench/model-bench.py --model <model> $FILES run --target gufo --table single-ar-q4,single-dflash2-q4
@@ -131,7 +131,7 @@ and the table says so.
 
 ## Rules for every category
 
-1. Production binary: `nix build`, `./result/bin/gufo`. The driver records
+1. Production binary: `cargo build --release -p gufo`, `./target/release/gufo`. The driver records
    the Git revision, machine fingerprint, reference tool version, measurement
    date and every server command line (file paths reduced to basenames) in
    each artifact. You record by hand, in `artifacts/model-identities.json`
@@ -156,8 +156,8 @@ and the table says so.
    stop) is not a result; the driver rejects it and names the table's
    `context` to raise. Run model jobs sequentially; nothing else on the GPU.
 4. Before publishing a speed refresh of unchanged code, run the model's fast
-   correctness suite when it has one (Qwen3.8 27B: `nix develop -c python3
-   tools/qwen27b/check.py fast`; DeepSeek: `nix develop -c tools/ds4/check.py fast`;
+   correctness suite when it has one, outside `nix develop` (Qwen3.8 27B:
+   `python3 tools/qwen27b/check.py fast`; DeepSeek: `tools/ds4/check.py fast`;
    Flash-Next has no dedicated fast model suite). Contract tests and concurrency
    hashes do not replace independent model qualification; the full
    `QUALITY.md` suites are for changed kernels or models. Greedy speculative output must match AR token
@@ -456,26 +456,6 @@ steps, scheduler and guidance.
 
 A two-step smoke check is a development control, never the headline. Image
 quality is measured in `QUALITY.md`.
-
-## Video / audiovisual generation
-
-Model: `minimax-h3`. Reference: **audio.cpp** server (`minimax_h3` model
-spec) if it executes on ROCm; verify first and fall back to a wrapper around
-the official Diffusers pipeline, labelled. Full generation requires the user's
-explicit approval and `--allow-full-generation`.
-
-1. **Loading.** Metadata readiness; first prompt-encoder layers time; peak
-   retained device memory.
-2. **Presets.** Per preset (`exact 512x512`, `exact-1344x768`, `fast`,
-   `aggressive`): single-request wall, `first_preview_ms`, peak resident
-   memory, delivery-quality note. Columns:
-   `Preset | Gufo wall | <ref> wall | Gain | Gufo peak GiB | <ref> peak GiB | Gain`.
-3. **Phase split** (Gufo only). Prompt encoding, AdaLN precompute, denoising,
-   VisualVAE, AudioVAE, mux, from `tools/gufo/h3_profile.py`.
-4. **Component inventory.** Tensor bytes per component; never summed as if
-   resident together.
-5. **Queue.** One worker; report C2 queue latency and say there is no
-   parallel execution.
 
 ## Finish
 

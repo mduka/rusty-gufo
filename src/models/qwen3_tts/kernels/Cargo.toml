@@ -1,0 +1,21 @@
+[package]
+name = "gufo-qwen3-tts-kernels"
+version = "0.0.0"
+description = "Qwen3-TTS HIP kernels behind generated, checked Rust launchers"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-qwen3-tts-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate tests/fixtures/embedding_gemma2/tokenizer_golden.json.
+"""Regenerate src/models/embedding_gemma2/tests/fixtures/tokenizer_golden.json.
 
 The reference is the Hugging Face `tokenizers` library loading the
 checkpoint's tokenizer.json. The fixture records what the production
@@ -188,7 +188,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=REPO / "models/embeddinggemma-2")
     parser.add_argument("--output", type=Path,
-                        default=REPO / "tests/fixtures/embedding_gemma2/tokenizer_golden.json")
+                        default=REPO / "src/models/embedding_gemma2/tests/fixtures/tokenizer_golden.json")
     args = parser.parse_args()
 
     path = args.model / "tokenizer.json"

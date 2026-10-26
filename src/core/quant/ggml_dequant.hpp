@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -10,14 +11,10 @@
 
 namespace gufo::quant {
 
-// Canonical quantized block layouts. These are the authoritative field
-// layouts for the dequant/dot paths. Relocated verbatim from the internal
-// definitions in ggml_dequant.cpp so the header is the single source of
-// truth; field order and byte sizes match the HIP path
-// (src/models/qwen/hip/quant_ops.hpp) and the historical per-file copies
-// (models/qwen/state.hpp, tests/). Do NOT redefine block_* locally. Sizes are
-// static_asserted; this is the layout contract (see the parity test that
-// proves field order against the byte-level spec).
+// The GGML quantized block layouts the HIP launchers and kernels share; the
+// Rust side (gufo-formats) uses the same layouts. Field order and byte sizes
+// match the HIP path (src/models/qwen/hip/quant_ops.hpp). Do NOT redefine
+// block_* locally. Sizes are static_asserted.
 #pragma pack(push, 1)
 struct block_q4_K {
   std::uint16_t d;
@@ -134,74 +131,73 @@ inline constexpr std::int8_t kValuesIq4Nl[16] = {
 
 /// Returns the encoded byte count for one logical quantized row, or zero when
 /// the type is not quantized or the element count is not block aligned.
-[[nodiscard]] std::size_t QuantizedRowBytes(core::GgmlType type,
-                                            std::size_t elements) noexcept;
-
-/// Returns the physical byte count for a tensor with `elements` logical
-/// elements, or zero when the format is unsupported/misaligned.
-[[nodiscard]] std::size_t EncodedSizeBytes(core::GgmlType type,
-                                           std::size_t elements) noexcept;
-
-// Standard 16-bit float helper
-float Fp16ToFloat(std::uint16_t h) noexcept;
-
-// Dequantize row of Q4_K to float
-void DequantizeQ4_K(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of Q5_K to float
-void DequantizeQ5_K(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of Q6_K to float
-void DequantizeQ6_K(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of Q3_K to float
-void DequantizeQ3_K(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of Q8_K to float
-void DequantizeQ8_K(const void* src, float* dst, std::size_t k);
-
-// Compute dot product of quantized row with FP32 vector
-float DotProductQ4_K(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
-// Compute dot product of Q5_K quantized row with FP32 vector
-float DotProductQ5_K(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
-float DotProductQ6_K(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
-float DotProductQ3_K(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
-float DotProductQ8_K(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
-
-// Dequantize row of Q8_0 to float
-void DequantizeQ8_0(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of IQ4_NL to float
-void DequantizeIQ4_NL(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of IQ4_XS to float
-void DequantizeIQ4_XS(const void* src, float* dst, std::size_t k);
-
-// Dequantize row of IQ3_S to float
-void DequantizeIQ3_S(const void* src, float* dst, std::size_t k);
-
-// Compute dot product of IQ4_NL quantized row with FP32 vector
-float DotProductIQ4_NL(const void* row_data, std::span<const float> vec,
-                       std::size_t k);
-// Compute dot product of IQ4_XS quantized row with FP32 vector
-float DotProductIQ4_XS(const void* row_data, std::span<const float> vec,
-                       std::size_t k);
-// Compute dot product of IQ3_S quantized row with FP32 vector
-float DotProductIQ3_S(const void* row_data, std::span<const float> vec,
-                      std::size_t k);
-
-/// Returns the 512-entry IQ3_S grid table (each entry packs four uint8
-/// magnitudes).
-[[nodiscard]] const std::uint32_t* Iq3sGrid() noexcept;
-
-// Compute dot product of Q8_0 quantized row with FP32 vector
-float DotProductQ8_0(const void* row_data, std::span<const float> vec,
-                     std::size_t k);
+[[nodiscard]] inline std::size_t QuantizedRowBytes(
+    core::GgmlType type, std::size_t elements) noexcept {
+  const std::size_t block_qk = QuantizedBlockElements(type);
+  std::size_t block_bytes = 0;
+  switch (type) {
+    // GGML storage layouts also used by the DeepSeek runtime. Storage support
+    // here does not imply that every model has a compute kernel for the type.
+    case core::GgmlType::kQ4_0:
+      block_bytes = 18;
+      break;
+    case core::GgmlType::kQ4_1:
+      block_bytes = 20;
+      break;
+    case core::GgmlType::kQ5_0:
+      block_bytes = 22;
+      break;
+    case core::GgmlType::kQ5_1:
+      block_bytes = 24;
+      break;
+    case core::GgmlType::kQ8_1:
+      block_bytes = 36;
+      break;
+    case core::GgmlType::kQ2_K:
+      block_bytes = 84;
+      break;
+    case core::GgmlType::kIQ2_XXS:
+      block_bytes = 66;
+      break;
+    case core::GgmlType::kQ3_K:
+      block_bytes = sizeof(block_q3_K);
+      break;
+    case core::GgmlType::kQ4_K:
+      block_bytes = sizeof(block_q4_K);
+      break;
+    case core::GgmlType::kQ5_K:
+      block_bytes = sizeof(block_q5_K);
+      break;
+    case core::GgmlType::kQ6_K:
+      block_bytes = sizeof(block_q6_K);
+      break;
+    case core::GgmlType::kQ8_K:
+      block_bytes = sizeof(block_q8_K);
+      break;
+    case core::GgmlType::kQ8_0:
+      block_bytes = sizeof(block_q8_0);
+      break;
+    case core::GgmlType::kIQ4_NL:
+      block_bytes = sizeof(block_iq4_nl);
+      break;
+    case core::GgmlType::kIQ4_XS:
+      block_bytes = sizeof(block_iq4_xs);
+      break;
+    case core::GgmlType::kIQ3_S:
+      block_bytes = sizeof(block_iq3_s);
+      break;
+    default:
+      return 0;
+  }
+  if ((elements % block_qk) != 0) {
+    return 0;
+  }
+  const std::size_t blocks = elements / block_qk;
+  if (blocks > std::numeric_limits<std::size_t>::max() / block_bytes) {
+    return 0;
+  }
+  return blocks * block_bytes;
+}
 
 }  // namespace gufo::quant
 

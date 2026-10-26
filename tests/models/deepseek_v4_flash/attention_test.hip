@@ -13,7 +13,6 @@
 
 #include "src/models/deepseek_v4_flash/kernels/rocm/detail/ds4_rocm_decode_attention.hip.hpp"
 #include "src/models/deepseek_v4_flash/kernels/rocm/detail/ds4_rocm_indexer_score.hip.hpp"
-#include "src/models/deepseek_v4_flash/runtime/dspark_internal.h"
 
 void check_indexer_selection(bool benchmark);
 void check_dspark_candidates();
@@ -688,6 +687,28 @@ void check_target_attention() {
       "double-precision checks passed");
 }
 
+struct DsparkSpan {
+  uint32_t start = 0;
+  uint32_t count = 0;
+};
+
+// Mirrors graph::dspark::visible_span in
+// src/models/deepseek_v4_flash/src/graph/dspark.rs.
+constexpr DsparkSpan dspark_visible_span(uint32_t prefix_tokens,
+                                         uint32_t draft_rows,
+                                         uint32_t cache_capacity) {
+  constexpr uint32_t window = 128;  // DS4_N_SWA
+  if (draft_rows == 0 || draft_rows > cache_capacity ||
+      prefix_tokens > UINT32_MAX - draft_rows) {
+    return {};
+  }
+  const uint32_t past = prefix_tokens < window ? prefix_tokens : window;
+  if (past > cache_capacity - draft_rows) {
+    return {};
+  }
+  return {(prefix_tokens - past) % cache_capacity, past + draft_rows};
+}
+
 void check_dspark_window() {
   constexpr unsigned heads = 64, dim = 512, cap = 4352;
   std::mt19937 gen(73);
@@ -711,7 +732,7 @@ void check_dspark_window() {
           row[d] = dist(gen);
         std::copy(row.begin(), row.end(), kv.begin() + (pos % cap) * dim);
       }
-      const auto span = ds4_dspark_visible_span(prefix, block, cap);
+      const auto span = dspark_visible_span(prefix, block, cap);
       float *dq, *dk, *ds, *dout;
       check(hipMalloc(&dq, q.size() * sizeof(float)));
       check(hipMalloc(&dk, kv.size() * sizeof(float)));
@@ -784,7 +805,7 @@ int main(int argc, char** argv) {
   const bool benchmark =
       argc == 2 && std::string_view(argv[1]) == "--benchmark";
   if (argc > 1 && !benchmark) {
-    std::fprintf(stderr, "usage: ds4_attention_test [--benchmark]\n");
+    std::fprintf(stderr, "usage: ds4_attention [--benchmark]\n");
     return 2;
   }
 

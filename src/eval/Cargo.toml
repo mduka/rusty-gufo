@@ -1,0 +1,17 @@
+[package]
+name = "gufo-eval"
+version = "0.0.0"
+description = "The pinned capability evaluation of `gufo eval`: cases, answer extraction and grading, and the client of the OpenAI-compatible endpoint"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The package holds the Rust sources and their tests.
+include = ["Cargo.toml", "src/**/*.rs", "tests/*.rs"]
+
+[dependencies]
+gufo-core.workspace = true
+ureq.workspace = true
+
+[lints]
+workspace = true

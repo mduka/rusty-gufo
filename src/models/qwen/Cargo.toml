@@ -1,0 +1,32 @@
+[package]
+name = "gufo-qwen"
+version = "0.0.0"
+description = "Chat template, vision encoder and kernels shared by the Qwen language models"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The C++ sources, kernels and tools of the Qwen language models share the
+# directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a model file but no device: cargo test -p gufo-qwen --features models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-formats.workspace = true
+gufo-hip.workspace = true
+gufo-qwen-kernels = { path = "kernels" }
+sha2.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

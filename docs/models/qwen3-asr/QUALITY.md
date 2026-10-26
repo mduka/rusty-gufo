@@ -28,12 +28,12 @@ Official [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR/tree/7c6daf77a2421100f5
 and [checkpoint](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5).
 Tests and the independent runner live in
 [`src/models/qwen3_asr`](../../../src/models/qwen3_asr).
-Select the changed frontend, encoder, decoder or transcription test:
+Select the changed test: `frontend` or `transcription` of `gufo-qwen3-asr`, or
+`checkpoint`, `graphs` or `text_ops` of its kernel crate:
 
 ```sh
-nix develop -c cmake --build --preset gpu-test --target qwen3_asr_transcription_hip_test
-nix develop -c ctest --preset gpu-full -R '^qwen3_asr_transcription_hip_test$' \
-  --no-tests=error --output-on-failure
+cargo test --profile gpu-test -p gufo-qwen3-asr --features gpu --test <name>
+cargo test --profile gpu-test -p gufo-qwen3-asr-kernels --features gpu --test <name>
 ```
 
 Generate official tensors with `reference/run_official.py --text-attention eager

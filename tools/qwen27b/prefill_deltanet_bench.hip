@@ -4,9 +4,9 @@
 // Self-contained (no repository headers) so it compiles directly with hipcc on
 // the supported gfx1151 host for fast kernel-design iteration. Winning variants
 // are ported into src/models/qwen/hip/kernels/ssm_recurrence.hip and validated
-// through `nix build` plus the CTest oracles.
+// through the release build plus the gufo-qwen35 parity tests.
 //
-// Build inside Nix with tools/bench/build.sh and this source path.
+// Build with tools/bench/build.sh and this source path.
 // Run: /tmp/prefill_deltanet_bench -b 2048 -i 3
 //
 // Shapes are the production Qwen3.8-27B linear-attention layer: 48 value heads

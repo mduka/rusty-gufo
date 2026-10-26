@@ -277,7 +277,8 @@ def main():
             parser.error(f"the isolated fault runner does not accept {option}")
     args.fault_library = args.fault_library.resolve()
     if not args.fault_library.is_file():
-        parser.error("fault library does not exist; build the device_loss_faults CMake target")
+        parser.error("fault library does not exist; build tests/functional/device_loss_faults.cpp "
+                     "as in tests/functional/README.md")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     report = {

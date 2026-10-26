@@ -8,8 +8,10 @@ namespace qfn_mmq {
 #include "mmvq.hpp"
 #include "quantize.hpp"
 #include "mmid.hpp"
-static int g_routed_max_expert_rows = 0;
-static int g_routed_tile_cols = 0;
+// gufo (Rust engine): per thread, as a caller sets the hints right before
+// the launches they shape.
+static thread_local int g_routed_max_expert_rows = 0;
+static thread_local int g_routed_tile_cols = 0;
 static int prepare_decode_kernels();
 extern "C" int qfn_mmq_init(int device) {
     if (device < 0) {

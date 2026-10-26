@@ -1,0 +1,38 @@
+[package]
+name = "gufo-deepseek-v4-flash"
+version = "0.0.0"
+description = "DeepSeek V4 Flash text generation on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The C++ sources, kernels and tests of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device and the model:
+# cargo test -p gufo-deepseek-v4-flash --features gpu
+gpu = []
+# Tests that need the model files but no device:
+# cargo test -p gufo-deepseek-v4-flash --features models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-hip.workspace = true
+gufo-deepseek-v4-flash-kernels.workspace = true
+# The engine's process lock (flock).
+rustix.workspace = true
+# The pinned chat template's digest.
+sha2.workspace = true
+
+[dev-dependencies]
+# The scheduled backend of the serving QUALITY check.
+gufo-serve.workspace = true
+tempfile.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

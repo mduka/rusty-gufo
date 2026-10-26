@@ -2,54 +2,52 @@
 
 ## Platform and build
 
-Production targets Linux x86-64 AMD Strix Halo (`gfx1151`) only. CMake owns
-compiler flags, dependencies and installation; Nix supplies the pinned toolchain.
+Production targets Linux x86-64 AMD Strix Halo (`gfx1151`) only. Gufo is a
+Cargo workspace built against an installed ROCm (`$ROCM_PATH`, else
+`/opt/rocm/core`, else `/usr`); `rust-toolchain.toml` pins the toolchain.
 Linux source-build prerequisites are in [README.md](README.md#build-from-source).
 
 ```sh
-nix build                              # production package, no tests/tools
-./result/bin/gufo diagnose
-nix build .#checks.x86_64-linux.pr      # bounded hosted CPU/repository checks
-nix develop                            # GPU development and reference tools
-
-# Same production build without Nix, with the documented dependencies installed
-cmake --preset release
-cmake --build --preset release --parallel 4
+cargo build --release -p gufo          # production binary
+./target/release/gufo diagnose
+nix develop                            # profiling, reference and client tools
 ```
 
-Stage only task-owned paths before Nix builds; flakes include tracked files.
-Measure performance with `result/bin/gufo` or `build/release/gufo`. Preserve
+Build and measure outside `nix develop`: its ROCm is not the one the binary
+links. Measure performance with `target/release/gufo`. Preserve
 compiler/dependency versions when comparing results.
 
 ## Focused tests
 
-Formatting and Python repository checks may run on the editing host; they do
-not need the remote GPU. Before committing C++ changes, run the shared CI check:
+`tools/ci/check-rust.sh` is the gate before every commit: formatting,
+clippy, the GPU and model tests of the packages a change reaches, the
+unsafe policy, the tool tests and the documentation and dependency checks.
+`--full` runs every test, at the end of each larger step. Formatting and Python
+repository checks may run anywhere; GPU tests need the gfx1151. Before
+committing hand-written C++ (kernels, `src/hip/shim`), run:
 
 ```sh
 nix shell --inputs-from . nixpkgs#clang-tools -c python3 tools/ci/check-format.py
 # Add --fix to apply formatting, then rerun the check.
 ```
 
-Run the smallest check covering the change. `gpu-test` is RelWithDebInfo with
-assertions enabled. Build only the affected target during iteration:
+Run the smallest check covering the change during iteration:
 
 ```sh
-nix develop -c cmake --preset gpu-test
-nix develop -c cmake --build --preset gpu-test --target <test-target>
-nix develop -c ctest --preset gpu-full -R '^<test-name>$' --output-on-failure
+cargo test -p <package>                                    # host-only tests
+cargo test --profile gpu-test -p <package> --features gpu  # GPU tests
+cargo test --profile gpu-test -p <package> --features gpu,models --test <name>
 ```
 
-The same CMake/CTest commands work outside Nix. `cmake --build --preset pr`
-runs the hosted contract suite after configuring `cpu-test`. Full CPU checks,
-sanitisers, GPU/operator/model checks and H3 quality tools remain available
-locally; see [docs/TESTING.md](docs/TESTING.md). Do not run full model sweeps,
-video generation or duplicate suites for routine edits. A missing-model skip
-is not a quality pass. Broaden checks when shared behavior changes or failures
+`gpu-test` is optimised like release, with debug assertions and overflow
+checks. Model QUALITY checks are `#[ignore]` tests; see
+[docs/TESTING.md](docs/TESTING.md). Do not run full model sweeps or
+duplicate suites for routine edits. A missing-model failure is not a
+quality pass. Broaden checks when shared behavior changes or failures
 expose risk.
 
-Text API functional/regression tests live in [tests/functional/](tests/functional/README.md).
-Select suites explicitly. Model-specific changes need the affected model/modes;
+Text API functional/regression tests live in [tests/functional/](tests/functional/README.md)
+and run against `target/release/gufo`. Select suites explicitly. Model-specific changes need the affected model/modes;
 use all four profiles only for shared behavior changes. Run correctness on the
 candidate; use main for matched affected timing controls and suspected regressions,
 not a duplicate full correctness run. Reuse baseline evidence only when revision,
@@ -66,7 +64,8 @@ another full matrix.
 For reported coding-agent loops, also replay the affected workflow with
 `tests/functional/pi_agent.py`; retain its sessions and inspect actual tool results.
 Retain numerical quality tests and the standard speed benchmark. Keep these
-tests in `tests/functional/`, outside hosted model CI; avoid full sweeps.
+tests in `tests/functional/`, outside hosted CI, which has no ROCm or gfx1151
+([.github/workflows/ci.yml](.github/workflows/ci.yml)); avoid full sweeps.
 
 ## Profiling and kernels
 
@@ -76,21 +75,28 @@ Use `tools/bench/build.sh` for standalone HIP experiments,
 `tools/prof/prof.py` for pipeline/wall-time profiles, and
 `tools/prof/isa_mix.py` for instruction analysis. Production paths must retain
 quality; successful optimizations become the default, without extra switches.
+Kernel launchers are declared in each kernel crate's `launch.toml`, with
+extent probes for every launcher.
 
 ## Development
 
 - Keep model code, tests, tools and numerical contracts with their model.
-- Use the shared Qwen control-token constants for framing; see
-  [src/models/qwen/AGENTS.md](src/models/qwen/AGENTS.md). Inspect their definitions
+  In a package, `src/` holds production code, `tests/` its tests and
+  fixtures, `tests/reference/` the programs that check against upstream's
+  C++ (or another reference) or record reference data, and `examples/` the
+  Rust side of those dumps. The repository's `tools/` holds development
+  tools, benchmarks and profilers.
+- Qwen control-token spellings live in `src/core/src/qwen_tokenizer.rs` and
+  `src/models/qwen/src/chat_template.rs`, mirrored for Python in
+  `tools/gufo/control_tokens.py`. Keep them identical, inspect their uses
   when reviewing or changing behavior, and keep reference fixtures independent.
-- Put Windows-specific code in `src/core/platform/`: one leaf per OS facility
-  (files, pages, sockets), whose sources may branch on `_WIN32` or split into
-  `<leaf>_posix.cpp`/`<leaf>_windows.cpp` selected in CMake. Outside it and
-  vendored code, call the leaf, with no `windows.h` or `_WIN32`/`_MSC_VER`
-  checks. POSIX code moves into a leaf, verbatim, once it gains a Windows
-  counterpart. Never emulate POSIX with macros or copy a file per OS; when the
-  logic itself differs, add `<file>_windows.cpp` beside it.
 - Use one canonical long option and backend name per behavior; avoid aliases.
+- `unsafe` lives in `gufo-hip`, the generated launcher modules and the
+  kernel build's one call into Cargo's jobserver (`tools/ci/check-unsafe.py`).
+- Port upstream changes as [Gufo in Rust](docs/RUST.md#following-upstream)
+  describes: kernels keep upstream's paths and arithmetic, host code follows
+  the C++ order. Comments that cite a C++ file mean upstream's tree at the
+  reference release.
 - Use `gh` for GitHub operations after checking `gh auth status`.
 - Follow Conventional Commits with a single-line message. Title pull requests
   according to [the release policy](docs/RELEASING.md); squash merging retains

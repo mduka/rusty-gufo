@@ -6,7 +6,7 @@ writes, for each probe text, the token ids and the 768-dimensional embedding.
 
   python3 tools/models/embedding_gemma2/reference_embeddings.py \
       --model models/embeddinggemma-2 \
-      --output tests/fixtures/embedding_gemma2/embedding_golden.json
+      --output src/models/embedding_gemma2/tests/fixtures/embedding_golden.json
 
 Requires: torch, transformers (with embedding_gemma2), sentence-transformers>=6.1.
 The float32 run is the reference. The BF16 run records the numerical distance

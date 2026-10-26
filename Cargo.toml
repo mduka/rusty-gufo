@@ -1,0 +1,93 @@
+[workspace]
+resolver = "3"
+members = [
+  "src/cli",
+  "src/cli/kernels",
+  "src/cli/serve",
+  "src/core",
+  "src/eval",
+  "src/formats",
+  "src/hip",
+  "src/hip/smoke",
+  "src/kernel_build",
+  "src/models/deepseek_v4_flash",
+  "src/models/deepseek_v4_flash/kernels",
+  "src/models/embedding_gemma2",
+  "src/models/embedding_gemma2/kernels",
+  "src/models/qwen",
+  "src/models/qwen/kernels",
+  "src/models/qwen35",
+  "src/models/qwen38_flash_next",
+  "src/models/qwen38_flash_next/kernels",
+  "src/models/qwen3_asr",
+  "src/models/qwen3_asr/kernels",
+  "src/models/qwen3_tts",
+  "src/models/qwen3_tts/kernels",
+  "src/models/qwen_image_21",
+  "src/models/qwen_image_21/kernels",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+gufo-cli-kernels = { path = "src/cli/kernels" }
+gufo-core = { path = "src/core" }
+gufo-deepseek-v4-flash-kernels = { path = "src/models/deepseek_v4_flash/kernels" }
+gufo-eval = { path = "src/eval" }
+gufo-formats = { path = "src/formats" }
+gufo-hip = { path = "src/hip" }
+gufo-kernel-build = { path = "src/kernel_build" }
+gufo-serve = { path = "src/cli/serve" }
+# Local time for server log lines (`localtime_r` in C++).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# WebP decoding of chat images (libwebp in C++), pure Rust.
+image-webp = "0.2"
+jobserver = "0.1"
+libc = "0.2"
+# PNG decoding of chat images (libpng in C++).
+png = "0.18"
+# Safe POSIX calls: effective UID, file modes, MSG_PEEK, uname, page size.
+rustix = { version = "1", features = ["event", "fs", "net", "param", "process", "system"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# SHA-1 of the WebSocket handshake (OpenSSL in C++).
+sha1_smol = "1"
+# SHA-256 of generated token IDs in `gufo bench -v` (OpenSSL in C++).
+sha2 = "0.10"
+# SIGINT/SIGTERM for the server's graceful shutdown, without unsafe code.
+signal-hook = { version = "0.3", default-features = false }
+tempfile = "3"
+toml = "0.9"
+# Unicode 17 tables, matching ICU 78 of the C++ tokenizer (see gufo-core).
+unicode-normalization = "0.1.25"
+# HTTPS of `gufo eval` and of chat image downloads (libcurl in C++): rustls
+# with the platform's trust store, also on Windows. The image guard uses
+# the resolver of `ureq::unversioned`, outside ureq's semver promise.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# JPEG decoding of chat images (libjpeg-turbo in C++); strict mode, may
+# differ from libjpeg-turbo by a few levels (docs/RUST.md).
+zune-core = "0.5"
+zune-jpeg = "0.5"
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+debug = "line-tables-only"
+
+# `cargo gpu-test`: optimised like release, with assertions and overflow
+# checks, like the C++ `gpu-test` preset (RelWithDebInfo with assertions).
+# Unoptimised, the differential runner tests take over an hour.
+[profile.gpu-test]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true

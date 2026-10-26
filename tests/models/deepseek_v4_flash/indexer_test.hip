@@ -21,6 +21,25 @@ void check(hipError_t status) {
   }
 }
 
+// The dispatch of the indexer_topk_partial launcher, whose Rust caller
+// takes it for 512 of 1,025 to 32,768 scores.
+bool indexer_partial_topk_launch(uint32_t* selected, const float* scores,
+                                 uint32_t n_comp, uint32_t n_tokens,
+                                 uint32_t top_k) {
+  if (top_k != 512u || n_comp <= 1024u || n_comp > 32768u || n_tokens == 0u)
+    return false;
+  if (n_comp <= 8192u)
+    indexer_partial_topk_kernel<8192>
+        <<<n_tokens, 256>>>(selected, scores, n_comp, n_tokens);
+  else if (n_comp <= 16384u)
+    indexer_partial_topk_kernel<16384>
+        <<<n_tokens, 256>>>(selected, scores, n_comp, n_tokens);
+  else
+    indexer_partial_topk_kernel<32768, 512>
+        <<<n_tokens, 512>>>(selected, scores, n_comp, n_tokens);
+  return true;
+}
+
 // Previous dispatch for the measured range. These production fallback kernels
 // also serve wider batches and contexts; the CPU ordering is the quality
 // oracle.

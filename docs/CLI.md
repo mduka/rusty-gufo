@@ -16,7 +16,7 @@ prompt caching.
 
 This is an exhaustive list of functionalities and features offered by the gufo cli, the mapping between features and flags is not documented here and should be discovered using the `--help` command to avoid divergences between the implementation and the documentation.
 
-The supported model types are LLM, image, video, audio (TTS, ASR), and text embeddings.
+The supported model types are LLM, image, audio (TTS, ASR), and text embeddings.
 `gufo serve embedding` provides [EmbeddingGemma 2 text embeddings](SERVER.md#embeddings).
 `gufo serve image` provides [Qwen-Image-2.1 generation and editing](models/qwen-image-2.1/README.md).
 
@@ -44,7 +44,10 @@ The supported model types are LLM, image, video, audio (TTS, ASR), and text embe
 
 - `temperature` — randomness of the choice. Low (for example
   0.2) gives predictable, repetitive answers; high (1.0+) gives varied,
-  creative ones. Greedy decoding is the low extreme.
+  creative ones. Greedy decoding is the low extreme. Unset sampling options
+  follow the model's recommended preset for the thinking mode (Qwen3.8:
+  1.0 / top-p 0.95 / top-k 20 with thinking, 0.7 / 0.8 / 20 with presence
+  penalty 1.5 without); `bench` stays greedy.
 - `topP` — only consider the smallest set of tokens whose probabilities add
   up to P (nucleus sampling). In practice: a "keep only plausible tokens"
   filter; lower means safer output.
@@ -86,15 +89,10 @@ The supported model types are LLM, image, video, audio (TTS, ASR), and text embe
 
 - `cacheDisk` — enable an on-disk cache of computed prompt state, reused
   across requests and restarts. In practice: repeated or shared prompts get
-  much faster; costs disk space. Give each Qwen27B or Flash-Next server its own
-  directory: one server owns it, and a second one fails at
-  startup.
-- `cacheDiskBytes` — the maximum size of that cache on disk. Qwen27B and Flash-Next also
-  count unfinished writes, and lowering it removes its oldest checkpoints
-  (by creation) at the next start.
-- `cacheDiskStagingBytes` — RAM used to move cache entries to and from disk.
-  Qwen27B and Flash-Next stream entries of any size through a 1 MiB buffer by default;
-  other models need it to hold a whole entry. See
+  much faster; costs disk space.
+- `cacheDiskBytes` — the maximum size of that cache on disk.
+- `cacheDiskStagingBytes` — host RAM that bounds queued captures, disk writes
+  and each disk read; a checkpoint is staged whole, so it must fit. See
   [the server guide](SERVER.md) for the defaults.
 
 **Speculative decoding**
@@ -133,30 +131,11 @@ seed. Speed depends on acceptance and verification cost.
   buffered for one request; protects against slow clients.
 - `maxBufferedOutputTotal` — the same buffer budget across all requests.
 
-**Diagnostics**
-
-- `trace` — a file that receives every text request body, the prompt as the
-  model reads it, the raw generated text and the reply sent back, as JSON
-  Lines. In practice: turn it on to see why a client received broken output,
-  then delete the file, because it holds whole conversations. See
-  [content trace](SERVER.md#content-trace).
-
-**Hardware**
-
-- `cpu` — CPU reference execution for supported models in `prompt` and
-  `chat`; unavailable in HTTP serving.
-
-### Video
-
-TODO
-
 ### Audio (TTS and ASR)
 
 Use `gufo serve tts --model DIR --context 4096` for synthesis or
 `gufo serve asr --model DIR --context 1024` for transcription. Each process
 loads one checkpoint; llama-swap can route both services under one API URL.
-The Nix helper uses the same `modality`, `model`, `context`, and
-`servedModelName` fields.
 
 `--context` reserves the model's token capacity. ASR applies that capacity
 per audio chunk, so long files do not require one enormous context. The
@@ -191,7 +170,7 @@ Use `gufo serve embedding --model DIR` to serve the EmbeddingGemma 2 text embedd
 - `model` (`-m`) is the EmbeddingGemma 2 model directory
 - `servedModelName` is the model ID that clients send and `/v1/models` reports, `embeddinggemma-2` by default
 
-The command takes the shared server options but not `--sessions` or `--context`, because requests run one at a time on the GPU and the model fixes the context window.  The [server guide](SERVER.md#embeddings) lists the request fields, the limits, and the task prefixes the model expects.
+The command takes the shared server options but not `--sessions` or `--context`, because requests take turns on one GPU encoder and the model fixes the context window.  The [server guide](SERVER.md#embeddings) lists the request fields, the limits, and the task prefixes the model expects.
 
 ```sh
 gufo serve --port 8080 embedding --model ./models/embeddinggemma-2
@@ -206,9 +185,9 @@ These apply to every modality, before or after the subcommand:
   port will not answer. Use `--host ::` to listen on IPv6 and IPv4 together.
 - `sessions` (`-j`) — preallocated GPU request sessions. In practice: more
   sessions means more requests can compute at once, at the cost of memory
-  per session. This option applies to LLM serving; image and speech servers use
-  their own bounded queues. The embedding server serializes requests on a mutex
-  and is bounded by `--max-connections`.
+  per session. This option applies to LLM serving; image and speech servers
+  use their own bounded queues. The embedding server gives concurrent requests
+  device turns in arrival order and is bounded by `--max-connections`.
 - `maxConnections` — maximum simultaneous HTTP connections. In practice:
   clients beyond the limit queue or are refused instead of piling up.
 - `maxRequestBytes` — maximum request body size. In practice: matters mostly
@@ -216,6 +195,10 @@ These apply to every modality, before or after the subcommand:
   32 MiB).
 - `apiKey` — if set, requests require `Authorization: Bearer <key>`, including
   health checks. Browser CORS preflight (`OPTIONS`) remains unauthenticated.
+- `ssePingInterval` (`--sse-ping-interval <N>`, default 15) — seconds an SSE
+  stream may stay silent before a `: ping` comment, as in llama-server; `-1`
+  disables pings. In practice: keeps proxies and clients such as undici from
+  dropping a stream during a long prefill or queue wait.
 - `logLevel` (`--log-level <error|warn|info|debug>`, default `info`) — how much
   the server logs. In practice: `debug` is the level that explains a stalled
   client, because it also shows health polls, admission refusals with the limit
@@ -223,30 +206,35 @@ These apply to every modality, before or after the subcommand:
   shorthand for `--log-level=debug`; passing both is a usage error. The tier is
   a threshold all the way down, and the `event=listening` startup confirmation
   is INFO-tier, so `warn` and `error` boot and stop silently. Prompt text,
-  message bodies and the API key are never logged at any level; only the
-  separate, opt-in `trace` file records content. Debug admission lines do name
-  the client by the peer IP address of its connection. See
+  message bodies and the API key are never logged at any level. Debug admission
+  lines do name the client by the peer IP address of its connection. See
   [server logs](SERVER.md#troubleshooting-logs).
+- `arbiter` (`--arbiter <HOST:PORT>`) — report to a `gufo arbiter` and follow
+  its GPU grants. In practice: start the TTS and the LLM of a voice assistant
+  with the same `--arbiter`, and text generation yields the GPU while streamed
+  speech falls behind. Without it a server runs alone, as before. See
+  [sharing the GPU](ARBITER.md).
 
 ## Commands
 
 ```text
 gufo serve
+gufo arbiter
 gufo chat
 gufo prompt
 gufo eval
 gufo bench
-gufo video
 gufo transcribe
 gufo diagnose
 ```
 
-`serve` starts the OpenAI-compatible server. `chat` maintains an interactive
-conversation. `prompt` executes one request and exits. `eval` grades the pinned
-DS4 capability questions through an already running OpenAI-compatible server.
-`bench` measures model execution, `video` runs MiniMax H3 generation,
-`transcribe` runs native Qwen3-ASR-1.7B speech recognition, and `diagnose` runs
-non-interactive system and hardware diagnostics.
+`serve` starts the OpenAI-compatible server. `arbiter` shares the GPU between
+servers started with `--arbiter` ([sharing the GPU](ARBITER.md)). `chat`
+maintains an interactive conversation. `prompt` executes one request and exits.
+`eval` grades the pinned DS4 capability questions through an already running
+OpenAI-compatible server. `bench` measures model execution, `transcribe` runs
+native Qwen3-ASR-1.7B speech recognition, and `diagnose` runs non-interactive
+system and hardware diagnostics.
 
 All commands support `--help` and `--version`. Unknown options and invalid
 combinations return an error instead of being ignored.

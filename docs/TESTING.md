@@ -2,88 +2,92 @@
 
 Run the smallest check that covers the change. Correctness and model-owned
 quality limits pass before performance results count. Production targets
-Linux gfx1151. CMake/CTest work with either system dependencies or `nix develop`.
+Linux gfx1151; GPU tests need the device and run outside `nix develop`.
 
 ## Commands
 
 ```sh
-# Formatting on the editing host, using CI's pinned formatter
+# The gate before every commit: scoped to the packages the change reaches
+tools/ci/check-rust.sh
+tools/ci/check-rust.sh --full          # every test
+
+# Focused tests (replace the package and test)
+cargo test -p gufo-core                                    # host-only tests
+cargo test --profile gpu-test -p gufo-qwen35 --features gpu,models --test decode
+
+# Model QUALITY checks are ignored by default; run them explicitly
+cargo test --profile gpu-test -p gufo-deepseek-v4-flash \
+  --features gpu,models --test quality -- --ignored
+tools/ds4/check.py model --model <gguf> --dspark-model <support gguf>
+
+# The DeepSeek kernel operator checks (standalone HIP programs)
+tests/models/deepseek_v4_flash/run_operator_checks.sh
+
+# Formatting of the hand-written C++ and HIP, with CI's pinned formatter
 nix shell --inputs-from . nixpkgs#clang-tools -c python3 tools/ci/check-format.py
 # Add --fix to apply formatting.
 
 # Documentation changes
-nix build .#checks.x86_64-linux.docs
-
-# Hosted CPU/repository checks
-nix build .#checks.x86_64-linux.pr
-
-# Focused test (replace the target and expression)
-nix develop -c cmake --preset gpu-test
-nix develop -c cmake --build --preset gpu-test --target minimax_h3_sampling_test
-nix develop -c ctest --preset gpu-full -R '^minimax_h3_sampling_test$' --output-on-failure
-
-# Host memory/undefined-behavior diagnostics
-nix develop -c cmake --preset cpu-sanitizer
-nix develop -c cmake --build --preset cpu-sanitizer
-nix develop -c ctest --preset cpu-sanitizer --output-on-failure
+python3 tools/ci/check-docs.py --root .
 ```
 
-Preset definitions, build options and repository mechanics are in
-[development](DEVELOPMENT.md). Formatting and the Python
-documentation/dependency checks run on the editing host without building Gufo;
-their entrypoints are in `tools/ci/`.
+Repository mechanics are in [development](DEVELOPMENT.md); the gate and how
+it selects packages are in [Gufo in Rust](RUST.md#tests-and-the-gate).
+GPU tests sit behind each package's `gpu` feature, tests that read model
+files behind `models` or `#[ignore]`. A test whose model or device is absent fails with an
+explicit message; that is not a quality pass.
 
-Selection by preset: `gpu-fast` excludes `slow` and `external-model` tests,
-`deepseek-gpu` and `qwen-gpu-kernel-oracle` select model/device suites, and
-`gpu-full` covers the complete hardware tree. External-model tests require
-their documented local artifacts. A skip due to an absent model or device is
-not a quality pass.
+Model tests find their files in the Hugging Face cache
+(`~/.cache/huggingface/hub`, at pinned revisions) unless an environment
+variable names them; the names are those of the C++ tests where they exist.
+Files without a pinned repository revision have no default:
+`GUFO_FLASH_NEXT_MODEL` (the first shard of the Flash-Next UD-Q4_K_XL
+trunk), `GUFO_FLASH_NEXT_MTP_MODEL` (its shared Q8_0 MTP sidecar),
+`GUFO_QWEN27B_MMPROJ` (the 27B `mmproj-BF16.gguf`),
+`GUFO_DEEPSEEK_V4_FLASH_MODEL` and `GUFO_DEEPSEEK_V4_FLASH_DSPARK_MODEL` (the
+IQ2XXS target and its DSpark support GGUF). Unset, the variable's name
+stands in for the path, so the failure says what to set.
 
-## Hosted versus local checks
+Fixtures that come from upstream's C++ engine or another reference name
+their source: a program under the package's `tests/reference/`. Those
+programs build against a checkout of the upstream reference
+(`$UPSTREAM`); each file's header gives the command. Their Rust
+counterparts are the package's `examples/`.
 
-GitHub runs formatting, documentation, dependency-inventory and server-command
-checks plus `cmake/Checks.cmake`: parsing, GGUF safety, sampling, templates,
-server/cache/scheduler behavior, model configuration and small audio/video API
-contracts. It builds only those test executables and the CPU CLI. It does not
-build ROCm, download weights, run full H3 oracles or compile whole-tree clang-tidy.
-The workflow cancels superseded runs and has a 25-minute limit.
+Two test groups also read local artifacts that the repository does not
+hold. The dense Qwen MTP test reads the test head that
+`src/models/qwen35/tests/reference/mtp_test_head.py` derives from the Qwen3.6 27B MTP
+GGUF (`GUFO_QWEN27B_MTP`, default `target/qwen-mtp/qwen36-mtp-head.gguf`).
+The Flash-Next forward and session tests read fixtures in the layout of the
+C++ dumps of `src/models/qwen38_flash_next/tests/reference/cpp_*.cpp`
+(`GUFO_FLASH_NEXT_FIXTURES`, default `target/flash-next`, 2.4 GB), recorded
+by a C++ build of the reference release with the same ROCm as the Rust
+build: the kernels are upstream's, but another compiler orders their
+arithmetic differently. A fresh checkout points these variables at an
+existing copy.
 
-```sh
-# Same hosted C++/CLI selection locally
-cmake --preset cpu-test
-cmake --build --preset pr --parallel 4
+## Local checks
 
-# Full CPU suite, or explicit non-hosted tools
-nix build .#checks.x86_64-linux.tests
-nix build .#checks.x86_64-linux.static-analysis
-nix build .#checks.x86_64-linux.h3-manifest
-nix build .#checks.x86_64-linux.h3-quality
-nix build .#checks.x86_64-linux.h3-ml-quality
-```
+Hosted runners have neither a gfx1151 nor the ROCm the binary links, so
+hosted CI ([ci.yml](../.github/workflows/ci.yml)) runs only what needs
+neither: rustfmt, the unsafe policy, the tool tests, the functional planner,
+runner and cache-workload tests, the documentation and dependency inventory
+and clang-format. The gate runs on the development host and covers formatting,
+clippy, the GPU and model tests of the packages a change reaches (all of
+them with `--full`), the kernel extent probes, the DeepSeek operator checks
+when their kernels change, the unsafe policy, the tool tests (A/B harness,
+gate scope, kernel resources, documentation and dependency checks,
+profiler, serving benchmark, speculative corpus), the DeepSeek
+dataset provenance, the CLI parser (`tests/cli/serve_test.py`), the
+documentation and the dependency inventory. Model QUALITY checks,
+long-context sweeps and A/B runs against another binary
+(`tools/bench/ab.py`, whose defaults are the gates of
+[Gufo in Rust](RUST.md#performance-against-upstream)) are explicit.
 
-Full CPU builds need Python NumPy for the offline tool tests. GPU model oracles
-need the documented local weights; use focused targets and CTest labels before
-running the complete tree. H3 development normally needs an analytic primitive,
-one transformer block or one denoiser forward. Full video generation and LPIPS
-are release/quality qualification, not routine PR work. `nix flake check` runs
-all declared checks and is deliberately not the hosted CI command.
-
-For Qwen image-prefix changes, build `qwen_vision_serving_test` with `gpu-test`
-and run it with `MODEL DRAFT_OR_DASH IMAGE_DIRECTORY --append-only`.
-The directory needs `red.png` and `blue.png`. This compares complete target
-logits when images are attached early or after a cached prefix, including
-snapshot restoration and sampled Flash-Next MTP replay.
-Qwen27B also checks exact restoration after cancellation between layers.
-Use the [HTTP continuation check](SERVER.md#hip-execution)
-for cancellation, thinking controls and disk restart.
-
-## Text API functional tests
-
-Use [tests/functional/](../tests/functional/README.md) for live API regression
-checks. Its single runner starts a private server and covers SDK transports,
-sampling defaults/overrides, tools, thinking, images, concurrent isolation,
-cancellation and RAM/disk replay. Select focused suites and the affected
-AR/speculative model modes; full model runs stay outside hosted CI.
+The text API functional suites ([tests/functional](../tests/functional/README.md))
+start `target/release/gufo serve llm` with local weights and check real
+responses through the OpenAI SDK; `impact.py` selects the suites a change
+reaches. They are explicit, like the QUALITY checks.
 
 ## Match validation to the change
 
@@ -106,10 +110,10 @@ Model-owned procedures and outstanding qualification gaps live with the model:
 - [DeepSeek V4 Flash](models/deepseek-v4-flash/QUALITY.md)
 - [Qwen3.8 27B](models/qwen3.8-27b/QUALITY.md)
 - [Qwen3.8 Flash-Next](models/qwen3.8-flash-next/QUALITY.md)
-- [MiniMax H3](models/minimax-h3/QUALITY.md)
 - [Qwen3-TTS](models/qwen3-tts/QUALITY.md)
 - [Qwen3-ASR](models/qwen3-asr/QUALITY.md)
 - [EmbeddingGemma 2](models/embeddinggemma-2/QUALITY.md)
+- [Qwen-Image-2.1](models/qwen-image-2.1/QUALITY.md)
 
 ## Independent references and artifacts
 

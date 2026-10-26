@@ -3,7 +3,9 @@
 
 Run in nix develop. Fixtures and results are written only to --directory.
 For HTTP checks use a fresh server: --served-model-name vision-test --sessions 2.
-The native qwen_vision_serving_test adds token-ID, sampler and disk-restart checks.
+The C++ qwen_vision_serving_test of an upstream v0.23.0 checkout
+(tests/models/qwen/vision_serving_test.cpp) adds token-ID, sampler and
+disk-restart checks on the model; no Rust test runs them.
 """
 from __future__ import annotations
 
@@ -196,7 +198,9 @@ def check_cli(directory, binary, target, draft, speculative):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--probe", type=Path, help="qwen27b_vision_test, for CPU pixel qualification")
+    parser.add_argument("--probe", type=Path,
+                        help="an upstream v0.23.0 checkout's C++ qwen27b_vision_test "
+                             "(run with --preprocess), for CPU pixel qualification")
     parser.add_argument("--http-url", help="fresh running gufo server")
     parser.add_argument("--model", default="vision-test")
     parser.add_argument("--binary", type=Path, help="gufo binary for prompt/chat checks")

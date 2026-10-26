@@ -1,5 +1,5 @@
 // hipBLASLt F16 x F16 -> F32 sweep over the Qwen3.8-Flash-Next dense prefill
-// shapes at 2048 tokens; build with tools/bench/build.sh inside nix develop,
+// shapes at 2048 tokens; build with tools/bench/build.sh,
 // passing this file's path, then run /tmp/dense_blaslt_sweep [tokens].
 // Weights rotate over four buffers so the 32 MiB MALL cannot serve them.
 #include <hip/hip_fp16.h>

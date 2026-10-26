@@ -1,0 +1,673 @@
+# Kernel contract for the Qwen-Image-2.1 kernels (docs/RUST.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last unless
+# a `stream` parameter places it. Trusted base: a wrong extent compiles and
+# lets a kernel overrun its buffer. Review changes like unsafe code; every
+# launcher needs probes (tests/extents.rs). The kernels index with `int`, so
+# dimensions stay below 2^31.
+
+[library]
+name = "qwen_image_21"
+root = "../../../.."
+namespace = "gufo::models::qwen_image_21::hip"
+headers = [
+  "src/models/qwen_image_21/hip/ops.hpp",
+  "src/models/qwen_image_21/kernels/adapters.hpp",
+]
+
+# The C++ build compiles every source with -O3 and without FMA contraction;
+# attention adds the iterative ILP scheduler (CMakeLists.txt).
+[[source]]
+path = "src/models/qwen_image_21/hip/kernels.hip"
+flags = ["-O3", "-ffp-contract=off"]
+
+[[source]]
+path = "src/models/qwen_image_21/hip/dense.hip"
+flags = ["-O3", "-ffp-contract=off"]
+
+[[source]]
+path = "src/models/qwen_image_21/hip/attention.hip"
+flags = ["-O3", "-ffp-contract=off", "-gline-tables-only", "-Xarch_device", "-mllvm=-amdgpu-sched-strategy=iterative-ilp"]
+
+[[source]]
+path = "src/models/qwen_image_21/hip/convolution.hip"
+flags = ["-O3", "-ffp-contract=off"]
+
+[[source]]
+path = "src/models/qwen_image_21/kernels/adapters.hip"
+flags = ["-O3", "-ffp-contract=off"]
+
+# --- Projections and convolutions --------------------------------------------
+
+[[launcher]]
+name = "pack_dense"
+cpp = "LaunchPackDenseFlat"
+returns = "void"
+doc = "Permutes `[rows][columns]` BF16 into the `[columns / 16][rows][16]` layout of the dense WMMA kernels."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+requires = ["columns % 16 == 0", "rows <= 2147483647", "columns <= 2147483647"]
+probes = [
+  { rows = 70, columns = 48 },
+  { rows = 128, columns = 128 },
+]
+
+[[launcher]]
+name = "dense"
+cpp = "LaunchDenseFlat"
+returns = "supported"
+doc = "`output = input · weightsᵀ` in BF16 with FP32 accumulation over packed weights and inputs, for the 4096/12288 projection shapes of the DiT and text encoder."
+params = [
+  { name = "weights", kind = "in", elem = "bf16", len = "channels * inner" },
+  { name = "input", kind = "in", elem = "bf16", len = "rows * inner" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * channels" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "channels", kind = "scalar", type = "u32" },
+  { name = "inner", kind = "scalar", type = "u32" },
+]
+requires = ["rows <= 2147483647"]
+probes = [
+  { rows = 3, channels = 4096, inner = 4096 },
+  { rows = 200, channels = 4096, inner = 12288 },
+  { rows = 300, channels = 12288, inner = 4096 },
+]
+
+[[launcher]]
+name = "dense_swiglu"
+cpp = "LaunchDenseSwiGluFlat"
+returns = "supported"
+doc = "`silu(input · gateᵀ) * (input · upᵀ)` over packed operands; the output keeps the packed layout."
+params = [
+  { name = "gate", kind = "in", elem = "bf16", len = "channels * inner" },
+  { name = "up", kind = "in", elem = "bf16", len = "channels * inner" },
+  { name = "input", kind = "in", elem = "bf16", len = "rows * inner" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * channels" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "channels", kind = "scalar", type = "u32" },
+  { name = "inner", kind = "scalar", type = "u32" },
+]
+requires = ["rows <= 2147483647"]
+probes = [
+  { rows = 5, channels = 12288, inner = 4096 },
+  { rows = 130, channels = 12288, inner = 4096 },
+]
+
+[[launcher]]
+name = "convolve3"
+cpp = "LaunchConvolve3Flat"
+returns = "supported"
+doc = "Implicit-GEMM 3x3 convolution over packed weights `[output_channels][channels * 9]` with BF16-rounded products before the bias; `padding_total` 1 pads only bottom and right."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * channels" },
+  { name = "weights", kind = "in", elem = "bf16", len = "output_channels * channels * 9" },
+  { name = "bias", kind = "in", elem = "bf16", len = "output_channels", optional = true },
+  { name = "output", kind = "out", elem = "bf16", len = "((height * upscale + padding_total - 3) / stride + 1) * ((width * upscale + padding_total - 3) / stride + 1) * output_channels" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "channels", kind = "scalar", type = "u32" },
+  { name = "output_channels", kind = "scalar", type = "u32" },
+  { name = "stride", kind = "scalar", type = "u32" },
+  { name = "padding_total", kind = "scalar", type = "u32" },
+  { name = "upscale", kind = "scalar", type = "u32" },
+]
+requires = ["stride >= 1", "padding_total <= 2", "height <= 65536", "width <= 65536"]
+probes = [
+  { height = 8, width = 8, channels = 96, output_channels = 96, stride = 1, padding_total = 2, upscale = 1, with = ["bias"] },
+  { height = 8, width = 6, channels = 576, output_channels = 1152, stride = 2, padding_total = 1, upscale = 1 },
+  { height = 2, width = 64, channels = 144, output_channels = 144, stride = 1, padding_total = 2, upscale = 1, with = ["bias"] },
+  { height = 3, width = 32, channels = 288, output_channels = 288, stride = 1, padding_total = 2, upscale = 2, with = ["bias"] },
+  { height = 5, width = 7, channels = 1152, output_channels = 576, stride = 1, padding_total = 0, upscale = 1 },
+]
+
+[[launcher]]
+name = "expand_convolution3"
+cpp = "LaunchExpandConvolution3Flat"
+returns = "supported"
+doc = "Tiled 3x3 im2col of output pixels `start..start + count` into `[count][channels * 9]`."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * channels" },
+  { name = "output", kind = "out", elem = "bf16", len = "count * channels * 9" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "channels", kind = "scalar", type = "u32" },
+  { name = "stride", kind = "scalar", type = "u32" },
+  { name = "padding", kind = "scalar", type = "u32" },
+  { name = "upscale", kind = "scalar", type = "u32" },
+  { name = "output_width", kind = "scalar", type = "u32" },
+  { name = "start", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["output_width >= 1", "start + count <= 2147483647", "height <= 65536", "width <= 65536", "padding <= 1"]
+probes = [
+  { height = 6, width = 5, channels = 64, stride = 1, padding = 1, upscale = 1, output_width = 5, start = 3, count = 9 },
+  { height = 6, width = 6, channels = 136, stride = 2, padding = 0, upscale = 1, output_width = 3, start = 0, count = 9 },
+  { height = 3, width = 4, channels = 8, stride = 1, padding = 1, upscale = 2, output_width = 8, start = 10, count = 14 },
+]
+
+[[launcher]]
+name = "im2col"
+cpp = "LaunchIm2col"
+returns = "void"
+doc = "Generic im2col of output pixels `start..start + count` into `[count][channels * kernel * kernel]`, with nearest upscaling and zero padding."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * channels" },
+  { name = "output", kind = "out", elem = "bf16", len = "count * channels * kernel * kernel" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "channels", kind = "scalar", type = "u32" },
+  { name = "kernel", kind = "scalar", type = "u32" },
+  { name = "stride", kind = "scalar", type = "u32" },
+  { name = "padding", kind = "scalar", type = "u32" },
+  { name = "upscale", kind = "scalar", type = "u32" },
+  { name = "output_width", kind = "scalar", type = "u32" },
+  { name = "start", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["kernel >= 1", "upscale >= 1", "output_width >= 1", "start + count <= 2147483647", "height <= 65536", "width <= 65536", "padding <= 65536", "count * channels * kernel * kernel <= 2147483647"]
+probes = [
+  { height = 5, width = 4, channels = 4, kernel = 3, stride = 1, padding = 1, upscale = 1, output_width = 4, start = 2, count = 7 },
+  { height = 4, width = 4, channels = 3, kernel = 1, stride = 1, padding = 0, upscale = 2, output_width = 8, start = 0, count = 64 },
+]
+
+# --- Normalisation, modulation, rotary embeddings ----------------------------
+
+[[launcher]]
+name = "normalize_rows"
+cpp = "LaunchNormalizeRowsFlat"
+returns = "supported"
+doc = "Row normalisation with the PyTorch BF16 boundaries of `kind` (0 LayerNorm, 1 RMSNorm, 2 zero-centred RMSNorm, 3 VAE channel RMSNorm), optionally followed by SiLU."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "weight", kind = "in", elem = "bf16", len = "columns", optional = true },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "kind", kind = "scalar", type = "u32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+  { name = "silu", kind = "scalar", type = "bool" },
+]
+requires = ["rows <= 2147483647", "columns <= 2147483647"]
+probes = [
+  { rows = 9, columns = 1152, kind = 0, epsilon = 1e-6, silu = false, with = ["weight", "bias"] },
+  { rows = 3, columns = 4096, kind = 1, epsilon = 1e-6, silu = false, with = ["weight"] },
+  { rows = 2, columns = 4096, kind = 2, epsilon = 1e-6, silu = false, with = ["weight"] },
+  { rows = 17, columns = 96, kind = 3, epsilon = 1e-6, silu = true, with = ["weight"] },
+  { rows = 4, columns = 2000, kind = 3, epsilon = 1e-6, silu = false },
+]
+
+[[launcher]]
+name = "normalize_rotary128"
+cpp = "LaunchNormalizeRotary128Flat"
+returns = "void"
+doc = "Per-head RMSNorm of 128-wide heads followed by the adjacent-pair rotary embedding of each row."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * heads * 128" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * heads * 128" },
+  { name = "weight", kind = "in", elem = "bf16", len = "128" },
+  { name = "frequencies", kind = "in", elem = "f32", len = "rows * 128" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+requires = ["rows * heads <= 2147483647"]
+probes = [
+  { rows = 5, heads = 32, epsilon = 1e-6 },
+  { rows = 3, heads = 3, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "prepare_modulation"
+cpp = "LaunchPrepareModulation"
+returns = "void"
+doc = "Modulation factors: `1 + x`, or `tanh(x)` for the gate blocks (odd 4096-column blocks) when `gates`."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "gates", kind = "scalar", type = "bool" },
+]
+requires = ["count <= 2147483647"]
+probes = [
+  { count = 32768, gates = true },
+  { count = 1000, gates = false },
+]
+
+[[launcher]]
+name = "normalize_modulate"
+cpp = "LaunchNormalizeModulate"
+returns = "void"
+doc = "LayerNorm of 4096-column rows times modulation block `part`; rows before `prefix` use the second modulation row."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * 4096" },
+  { name = "modulation", kind = "in", elem = "bf16", len = "2 * modulation_columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * 4096" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "modulation_columns", kind = "scalar", type = "u32" },
+  { name = "part", kind = "scalar", type = "u32" },
+  { name = "prefix", kind = "scalar", type = "u32" },
+]
+requires = ["(part + 1) * 4096 <= modulation_columns", "modulation_columns <= 2147483647", "rows <= 2147483647", "prefix <= 2147483647"]
+probes = [
+  { rows = 3, modulation_columns = 16384, part = 3, prefix = 1 },
+  { rows = 2, modulation_columns = 4096, part = 0, prefix = 0 },
+]
+
+[[launcher]]
+name = "modulate"
+cpp = "LaunchModulate"
+returns = "void"
+doc = "`x * modulation[part]`, BF16-rounded and added to the residual when given; rows before `prefix` use the second modulation row."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "modulation", kind = "in", elem = "bf16", len = "2 * modulation_columns" },
+  { name = "residual", kind = "in", elem = "bf16", len = "rows * columns", optional = true },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "modulation_columns", kind = "scalar", type = "u32" },
+  { name = "part", kind = "scalar", type = "u32" },
+  { name = "prefix", kind = "scalar", type = "u32" },
+]
+requires = ["(part + 1) * columns <= modulation_columns", "modulation_columns <= 2147483647", "rows * columns <= 2147483647", "prefix <= 2147483647"]
+probes = [
+  { rows = 3, columns = 4096, modulation_columns = 16384, part = 1, prefix = 2, with = ["residual"] },
+  { rows = 2, columns = 64, modulation_columns = 256, part = 3, prefix = 0 },
+]
+
+[[launcher]]
+name = "rotary"
+cpp = "LaunchRotary"
+returns = "void"
+doc = "Rotary embedding with FP32 cos/sin pairs per row: mode 0 rotates adjacent pairs, mode 1 halves, mode 2 halves with BF16-rounded tables and products."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * heads * dim" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * heads * dim" },
+  { name = "frequencies", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "mode", kind = "scalar", type = "u32" },
+]
+requires = ["dim % 2 == 0", "dim >= 2", "rows * heads * dim <= 2147483647"]
+probes = [
+  { rows = 4, heads = 16, dim = 72, mode = 1 },
+  { rows = 3, heads = 8, dim = 128, mode = 2 },
+  { rows = 2, heads = 2, dim = 4, mode = 0 },
+]
+
+# --- Attention ----------------------------------------------------------------
+
+[[launcher]]
+name = "reorder_heads"
+cpp = "LaunchReorderHeadsFlat"
+returns = "void"
+doc = "`[row][kv_head][dim]` to `[head][row][dim]`, repeating each KV head for its query heads."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * kv_heads * dim" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * heads * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+]
+requires = ["kv_heads >= 1", "heads % kv_heads == 0", "rows * heads * dim <= 2147483647"]
+probes = [
+  { rows = 130, heads = 32, kv_heads = 8, dim = 128 },
+  { rows = 5, heads = 16, kv_heads = 16, dim = 72 },
+  { rows = 129, heads = 9, kv_heads = 3, dim = 128 },
+]
+
+[[launcher]]
+name = "restore_heads"
+cpp = "LaunchRestoreHeadsFlat"
+returns = "void"
+doc = "`[head][row][dim]` back to `[row][head][dim]`."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * heads * dim" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * heads * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+]
+requires = ["rows * heads * dim <= 2147483647"]
+probes = [
+  { rows = 130, heads = 9, dim = 128 },
+  { rows = 5, heads = 16, dim = 72 },
+]
+
+[[launcher]]
+name = "fused_attention128"
+cpp = "LaunchFusedAttention128Flat"
+returns = "void"
+doc = "Online-softmax attention of query rows `query_start..query_start + query_count` over all keys, 128-wide heads in head-major layout; writes `[row][head][128]`."
+params = [
+  { name = "queries", kind = "in", elem = "bf16", len = "heads * rows * 128" },
+  { name = "keys", kind = "in", elem = "bf16", len = "heads * count * 128" },
+  { name = "values", kind = "in", elem = "bf16", len = "heads * count * 128" },
+  { name = "output", kind = "inout", elem = "bf16", len = "rows * heads * 128" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "query_start", kind = "scalar", type = "u32" },
+  { name = "query_count", kind = "scalar", type = "u32" },
+  { name = "limits", kind = "const", cpp_type = "const std::int32_t*", value = "nullptr" },
+]
+requires = ["query_start + query_count <= rows", "count >= 1", "heads * rows * 128 <= 2147483647", "heads * count * 128 <= 2147483647"]
+probes = [
+  { heads = 2, rows = 200, count = 520, query_start = 0, query_count = 200 },
+  { heads = 3, rows = 300, count = 600, query_start = 140, query_count = 160 },
+]
+
+[[launcher]]
+name = "fused_attention128_masked"
+cpp = "LaunchFusedAttention128Flat"
+returns = "void"
+doc = "`fused_attention128` where query row q sees only keys below `limits[q]`."
+params = [
+  { name = "queries", kind = "in", elem = "bf16", len = "heads * rows * 128" },
+  { name = "keys", kind = "in", elem = "bf16", len = "heads * count * 128" },
+  { name = "values", kind = "in", elem = "bf16", len = "heads * count * 128" },
+  { name = "output", kind = "inout", elem = "bf16", len = "rows * heads * 128" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "query_start", kind = "scalar", type = "u32" },
+  { name = "query_count", kind = "scalar", type = "u32" },
+  { name = "limits", kind = "indices", signed = true, len = "rows", below = "count + 1" },
+]
+requires = ["query_start + query_count <= rows", "count >= 1", "heads * rows * 128 <= 2147483647", "heads * count * 128 <= 2147483647"]
+probes = [
+  { heads = 2, rows = 200, count = 520, query_start = 0, query_count = 130, limits = 520 },
+  { heads = 1, rows = 260, count = 512, query_start = 3, query_count = 257, limits = 7 },
+]
+
+[[launcher]]
+name = "softmax"
+cpp = "LaunchSoftmax"
+returns = "void"
+doc = "Scaled softmax of `heads * queries` FP32 score rows of `keys` columns."
+params = [
+  { name = "scores", kind = "in", elem = "f32", len = "heads * queries * keys" },
+  { name = "probabilities", kind = "out", elem = "f32", len = "heads * queries * keys" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "queries", kind = "scalar", type = "u32" },
+  { name = "keys", kind = "scalar", type = "u32" },
+  { name = "query_start", kind = "scalar", type = "u32" },
+  { name = "limits", kind = "const", cpp_type = "const std::int32_t*", value = "nullptr" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+requires = ["keys >= 1", "keys <= 2147483647", "heads * queries <= 2147483647", "query_start <= 2147483647"]
+probes = [
+  { heads = 2, queries = 3, keys = 100, query_start = 0, scale = 0.125 },
+  { heads = 1, queries = 2, keys = 4100, query_start = 0, scale = 0.125 },
+  { heads = 1, queries = 2, keys = 5000, query_start = 0, scale = 0.125 },
+  { heads = 1, queries = 1, keys = 9000, query_start = 0, scale = 0.125 },
+]
+
+[[launcher]]
+name = "softmax_masked"
+cpp = "LaunchSoftmax"
+returns = "void"
+doc = "`softmax` where query row r sees only the first `limits[query_start + r % queries]` keys; the rest get probability 0."
+params = [
+  { name = "scores", kind = "in", elem = "f32", len = "heads * queries * keys" },
+  { name = "probabilities", kind = "out", elem = "f32", len = "heads * queries * keys" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "queries", kind = "scalar", type = "u32" },
+  { name = "keys", kind = "scalar", type = "u32" },
+  { name = "query_start", kind = "scalar", type = "u32" },
+  { name = "limits", kind = "indices", signed = true, len = "query_start + queries", below = "keys + 1" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+requires = ["keys >= 1", "keys <= 2147483647", "heads * queries <= 2147483647", "query_start <= 2147483647"]
+probes = [
+  { heads = 2, queries = 3, keys = 100, query_start = 4, scale = 0.125, limits = 50 },
+  { heads = 1, queries = 2, keys = 4100, query_start = 1, scale = 0.125, limits = 4100 },
+  { heads = 1, queries = 2, keys = 5000, query_start = 0, scale = 0.125, limits = 3 },
+]
+
+# --- Element-wise operations and layout --------------------------------------
+
+[[launcher]]
+name = "float_to_bf16"
+cpp = "LaunchFloatToBf16"
+returns = "void"
+doc = "FP32 to BF16, round to nearest even."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count <= 1099511627776"]
+probes = [{ count = 1000 }]
+
+[[launcher]]
+name = "bf16_to_float"
+cpp = "LaunchBf16ToFloat"
+returns = "void"
+doc = "BF16 to FP32."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count <= 1099511627776"]
+probes = [{ count = 1000 }]
+
+[[launcher]]
+name = "add_bias"
+cpp = "LaunchAddBias"
+returns = "void"
+doc = "BF16 `input + bias[i % columns]` from an FP32 product; convolutions round the product to BF16 first."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "convolution", kind = "scalar", type = "bool" },
+]
+requires = ["columns >= 1", "columns <= 2147483647", "count <= 1099511627776"]
+probes = [
+  { columns = 96, count = 960, convolution = true },
+  { columns = 7, count = 100, convolution = false },
+]
+
+[[launcher]]
+name = "activate"
+cpp = "LaunchActivate"
+returns = "void"
+doc = "Activation 0 SiLU, 1 tanh GELU, 2 erf GELU, 3 identity, BF16 in and out."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "activation", kind = "scalar", type = "u32" },
+]
+requires = ["activation <= 3", "count <= 1099511627776"]
+probes = [
+  { count = 1000, activation = 0 },
+  { count = 513, activation = 2 },
+]
+
+[[launcher]]
+name = "swiglu"
+cpp = "LaunchSwiGlu"
+returns = "void"
+doc = "`silu(gate) * up` in BF16."
+params = [
+  { name = "gate", kind = "in", elem = "bf16", len = "count" },
+  { name = "up", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count <= 1099511627776"]
+probes = [{ count = 777 }]
+
+[[launcher]]
+name = "add"
+cpp = "LaunchAdd"
+returns = "void"
+doc = "`left + right` in BF16."
+params = [
+  { name = "left", kind = "in", elem = "bf16", len = "count" },
+  { name = "right", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count <= 1099511627776"]
+probes = [{ count = 1025 }]
+
+[[launcher]]
+name = "euler"
+cpp = "LaunchEuler"
+returns = "void"
+doc = "Flow-matching Euler step `sample + bf16(dt * velocity)`."
+params = [
+  { name = "sample", kind = "in", elem = "bf16", len = "count" },
+  { name = "velocity", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "dt", kind = "scalar", type = "f32" },
+]
+requires = ["count <= 1099511627776"]
+probes = [{ count = 640, dt = -0.05 }]
+
+[[launcher]]
+name = "copy_columns"
+cpp = "LaunchCopyColumns"
+returns = "void"
+doc = "Columns `start..start + columns` of every row."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "rows * input_columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "input_columns", kind = "scalar", type = "u32" },
+  { name = "start", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+requires = ["start + columns <= input_columns", "columns >= 1", "rows * input_columns <= 2147483647"]
+probes = [
+  { rows = 5, input_columns = 3456, start = 1152, columns = 1152 },
+  { rows = 3, input_columns = 68, start = 0, columns = 64 },
+]
+
+[[launcher]]
+name = "embedding"
+cpp = "LaunchEmbedding"
+returns = "void"
+doc = "Rows `ids` of a BF16 table."
+params = [
+  { name = "table", kind = "in", elem = "bf16", len = "table_rows * columns" },
+  { name = "output", kind = "out", elem = "bf16", len = "count * columns" },
+  { name = "ids", kind = "indices", len = "count", below = "table_rows" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "table_rows", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["columns >= 1", "count * columns <= 2147483647"]
+probes = [
+  { count = 7, columns = 64, table_rows = 9, ids = 8 },
+]
+
+[[launcher]]
+name = "scatter_rows"
+cpp = "LaunchScatterRows"
+returns = "void"
+doc = "Writes (or BF16-adds) `values` row i into row `positions[i]` of `output`."
+params = [
+  { name = "values", kind = "in", elem = "bf16", len = "count * columns" },
+  { name = "output", kind = "inout", elem = "bf16", len = "output_rows * columns" },
+  { name = "positions", kind = "indices", signed = true, len = "count", below = "output_rows" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "add", kind = "scalar", type = "bool" },
+  { name = "output_rows", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["columns >= 1", "count * columns <= 2147483647"]
+probes = [
+  { count = 4, columns = 64, add = false, output_rows = 10, positions = 9 },
+  { count = 3, columns = 32, add = true, output_rows = 3, positions = 2 },
+]
+
+[[launcher]]
+name = "down_shortcut"
+cpp = "LaunchDownShortcut"
+returns = "void"
+doc = "VAE down-block shortcut: space-to-channel of `spatial`² pixels, averaged over channel groups of the last frame."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * input_channels" },
+  { name = "output", kind = "out", elem = "bf16", len = "(height / spatial) * (width / spatial) * output_channels" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "input_channels", kind = "scalar", type = "u32" },
+  { name = "output_channels", kind = "scalar", type = "u32" },
+  { name = "temporal", kind = "scalar", type = "u32" },
+  { name = "spatial", kind = "scalar", type = "u32" },
+]
+requires = ["spatial >= 1", "temporal >= 1", "output_channels >= 1", "(input_channels * temporal * spatial * spatial) % output_channels == 0", "height * width * input_channels <= 2147483647", "input_channels * temporal * spatial * spatial <= 2147483647"]
+probes = [
+  { height = 6, width = 4, input_channels = 96, output_channels = 192, temporal = 2, spatial = 2 },
+  { height = 3, width = 3, input_channels = 768, output_channels = 768, temporal = 1, spatial = 1 },
+]
+
+[[launcher]]
+name = "up_shortcut"
+cpp = "LaunchUpShortcut"
+returns = "void"
+doc = "VAE up-block shortcut: channel-to-space into 2x2 pixels, repeating channels of the last frame."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * input_channels" },
+  { name = "output", kind = "out", elem = "bf16", len = "height * width * 4 * output_channels" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "input_channels", kind = "scalar", type = "u32" },
+  { name = "output_channels", kind = "scalar", type = "u32" },
+  { name = "temporal", kind = "scalar", type = "u32" },
+]
+requires = ["temporal >= 1", "input_channels >= 1", "output_channels * temporal * 4 >= input_channels", "(output_channels * temporal * 4) % input_channels == 0", "height * width * 4 * output_channels <= 2147483647", "output_channels * temporal * 4 <= 2147483647"]
+probes = [
+  { height = 3, width = 2, input_channels = 1152, output_channels = 1152, temporal = 2 },
+  { height = 2, width = 5, input_channels = 576, output_channels = 288, temporal = 1 },
+]
+
+[[launcher]]
+name = "scale_latents"
+cpp = "LaunchScaleLatents"
+returns = "void"
+doc = "VAE latent normalisation per 64 channels: encode `(x - mean) / std`, decode `x * std + mean`."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "mean", kind = "in", elem = "bf16", len = "64" },
+  { name = "deviation", kind = "in", elem = "bf16", len = "64" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "encode", kind = "scalar", type = "bool" },
+]
+requires = ["count <= 1099511627776"]
+probes = [
+  { count = 640, encode = true },
+  { count = 100, encode = false },
+]
+
+[[launcher]]
+name = "vision_position"
+cpp = "LaunchVisionPosition"
+returns = "void"
+doc = "Adds the bilinearly interpolated 48x48 position table to `height * width` vision patches in merge order."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "height * width * 1152" },
+  { name = "table", kind = "in", elem = "bf16", len = "2304 * 1152" },
+  { name = "output", kind = "out", elem = "bf16", len = "height * width * 1152" },
+  { name = "height", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["height >= 2", "width >= 2", "height % 2 == 0", "width % 2 == 0", "height * width * 1152 <= 2147483647"]
+probes = [
+  { height = 4, width = 6 },
+  { height = 2, width = 2 },
+]

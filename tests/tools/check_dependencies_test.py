@@ -14,15 +14,15 @@ SPEC = importlib.util.spec_from_file_location(
 DEPENDENCIES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DEPENDENCIES)
 NOTICES = ROOT / "THIRD_PARTY_NOTICES.md"
-PACKAGE = ROOT / ".devops/nix/package.nix"
+LOCK = ROOT / "Cargo.lock"
 FLAKE = ROOT / "flake.nix"
 
 
 class CheckDependenciesTest(unittest.TestCase):
-    def verify(self, notices, package=PACKAGE, flake=FLAKE):
+    def verify(self, notices, lock=LOCK, flake=FLAKE):
         output = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-            return DEPENDENCIES.verify_dependencies(notices, package, flake), output.getvalue()
+            return DEPENDENCIES.verify_dependencies(notices, lock, flake), output.getvalue()
 
     def test_repository_inventory_passes(self):
         status, output = self.verify(NOTICES)
@@ -45,13 +45,26 @@ class CheckDependenciesTest(unittest.TestCase):
                     self.assertNotEqual(status, 0)
                     self.assertIn(f"'{name}' is missing", output)
 
-    def test_missing_nix_sources_fail(self):
-        missing = ROOT / "does-not-exist.nix"
-        for package, flake in ((missing, FLAKE), (PACKAGE, missing)):
-            with self.subTest(package=package.name, flake=flake.name):
-                status, output = self.verify(NOTICES, package, flake)
+    def test_each_locked_crate_is_needed(self):
+        lines = LOCK.read_text().splitlines(keepends=True)
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / "Cargo.lock"
+            for crate in DEPENDENCIES.REQUIRED_LOCKED_CRATES:
+                with self.subTest(crate=crate):
+                    name = f'name = "{crate}"\n'
+                    self.assertIn(name, lines)
+                    lock.write_text("".join(line for line in lines if line != name))
+                    status, output = self.verify(NOTICES, lock)
+                    self.assertNotEqual(status, 0)
+                    self.assertIn(f"crate '{crate}' missing", output)
+
+    def test_missing_dependency_sources_fail(self):
+        missing = ROOT / "does-not-exist"
+        for lock, flake in ((missing, FLAKE), (LOCK, missing)):
+            with self.subTest(lock=lock.name, flake=flake.name):
+                status, output = self.verify(NOTICES, lock, flake)
                 self.assertNotEqual(status, 0)
-                self.assertIn("does-not-exist.nix does not exist", output)
+                self.assertIn("does-not-exist does not exist", output)
 
 
 if __name__ == "__main__":

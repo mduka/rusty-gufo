@@ -376,6 +376,7 @@ def run_request(
     timings: dict[str, Any] | None = None
     useful_event_times: list[float] = []
     completion_parts: list[str] = []
+    reasoning_parts: list[str] = []
     saw_done = False
     try:
         with urllib.request.urlopen(
@@ -405,10 +406,15 @@ def run_request(
                     delta = choices[0].get("delta", {})
                     if isinstance(delta, dict):
                         content = delta.get("content")
+                        reasoning = delta.get("reasoning_content")
                         tool_calls = delta.get("tool_calls")
                         if isinstance(content, str) and content:
                             completion_parts.append(content)
-                        if content or tool_calls:
+                        # Reasoning models stream their thinking first; it
+                        # is generated output like the answer.
+                        if isinstance(reasoning, str) and reasoning:
+                            reasoning_parts.append(reasoning)
+                        if content or reasoning or tool_calls:
                             useful_event_times.append(clock())
                 candidate_usage = chunk.get("usage")
                 if isinstance(candidate_usage, dict):
@@ -583,8 +589,14 @@ def run_request(
         ),
         case_id=case_id,
         category=category,
+        # Content alone when there is no reasoning, so answer-only hashes
+        # stay comparable with earlier artifacts.
         completion_sha256=hashlib.sha256(
-            "".join(completion_parts).encode("utf-8")
+            (
+                json.dumps(["".join(reasoning_parts), "".join(completion_parts)])
+                if reasoning_parts
+                else "".join(completion_parts)
+            ).encode("utf-8")
         ).hexdigest(),
         prefill_tokens_per_second=(
             None if prefill_ms is None else _rate(prefill_tokens, prefill_ms)
@@ -996,38 +1008,25 @@ def _summarize_rounds(
     return result
 
 
-def run_benchmark(
+def measure_levels(
     *,
     base_url: str,
     model: str,
     prompt: str,
-    workload_id: str,
     max_tokens: int,
     temperature: float,
     concurrency_levels: list[int],
     warmup_rounds: int,
     repetitions: int,
     timeout_seconds: float,
-    fingerprint: dict[str, Any],
-    source_revision: str,
-    source_dirty: bool,
-    prompt_repeat: int = 1,
     endpoint_profile: str = "gufo",
     cache_prompt: bool | None = None,
-    notes: list[str] | None = None,
-) -> dict[str, Any]:
-    if not model:
-        raise ValueError("model must not be empty")
-    if not prompt:
-        raise ValueError("prompt must not be empty")
-    if max_tokens <= 0 or repetitions <= 0 or warmup_rounds < 0:
-        raise ValueError("token and repetition counts are invalid")
-    if not 0.0 <= temperature <= 2.0:
-        raise ValueError("temperature must be between zero and two")
-    if endpoint_profile not in ENDPOINT_PROFILES:
-        raise ValueError("endpoint profile must be gufo or openai")
-
-    run_nonce = uuid.uuid4().hex
+    run_nonce: str | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Warmup and measured rounds at every concurrency level. Prompts carry
+    `run_nonce` (random by default), so a fixed nonce repeats the same
+    requests against another server."""
+    run_nonce = run_nonce or uuid.uuid4().hex
     results: dict[str, Any] = {}
     warnings: list[str] = []
     for concurrency in concurrency_levels:
@@ -1064,6 +1063,53 @@ def run_benchmark(
         summary = _summarize_rounds(rounds)
         results[f"c{concurrency}"] = summary
         _warn_capacity(warnings, concurrency, summary)
+    return results, warnings
+
+
+def run_benchmark(
+    *,
+    base_url: str,
+    model: str,
+    prompt: str,
+    workload_id: str,
+    max_tokens: int,
+    temperature: float,
+    concurrency_levels: list[int],
+    warmup_rounds: int,
+    repetitions: int,
+    timeout_seconds: float,
+    fingerprint: dict[str, Any],
+    source_revision: str,
+    source_dirty: bool,
+    prompt_repeat: int = 1,
+    endpoint_profile: str = "gufo",
+    cache_prompt: bool | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    if not model:
+        raise ValueError("model must not be empty")
+    if not prompt:
+        raise ValueError("prompt must not be empty")
+    if max_tokens <= 0 or repetitions <= 0 or warmup_rounds < 0:
+        raise ValueError("token and repetition counts are invalid")
+    if not 0.0 <= temperature <= 2.0:
+        raise ValueError("temperature must be between zero and two")
+    if endpoint_profile not in ENDPOINT_PROFILES:
+        raise ValueError("endpoint profile must be gufo or openai")
+
+    results, warnings = measure_levels(
+        base_url=base_url,
+        model=model,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        concurrency_levels=concurrency_levels,
+        warmup_rounds=warmup_rounds,
+        repetitions=repetitions,
+        timeout_seconds=timeout_seconds,
+        endpoint_profile=endpoint_profile,
+        cache_prompt=cache_prompt,
+    )
 
     fingerprint_id = fingerprint.get("fingerprintId")
     canonical = fingerprint.get("canonical")
@@ -1640,7 +1686,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gufo",
         type=Path,
-        default=Path("./result/bin/gufo"),
+        default=Path("./target/release/gufo"),
         help="Release gufo binary used for automatic fingerprinting",
     )
     parser.add_argument("--output", type=Path, help="Write the JSON artifact")

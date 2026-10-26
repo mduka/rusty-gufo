@@ -1,46 +1,46 @@
 # Developer tools
 
-Use the Nix development environment for these tools. Production inference and
-speed measurements use `nix build` binaries under `result/bin` or the
-`release` CMake preset with the same toolchain. Tools are not part of the
-production install. `gpu-test` enables `GUFO_BUILD_TOOLS` for the compiled
-benchmark/tuning executables; Python tools run from this source tree.
+Python tools run from this source tree in the Nix development environment.
+Production inference and speed measurements use `target/release/gufo` from
+`cargo build --release -p gufo`, built outside that environment. Tools are
+not part of the binary; the HIP microbenchmarks build with
+`tools/bench/build.sh`.
 
 | Directory | Purpose |
 | --- | --- |
-| `bench/` | Kernel microbenchmarks, hipBLASLt tuning, and direct speculative-corpus checks; `model-bench.py` drives per-model BENCHMARKS.md tables against each model's reference |
+| `bench/` | Kernel microbenchmarks, `ab.py` A/B runs between two binaries (`ab-upstream.sh`: the workloads of [Gufo in Rust](../docs/RUST.md#performance-against-upstream)), and direct speculative-corpus checks; `model-bench.py` drives per-model BENCHMARKS.md tables against each model's reference, `qwen3-asr-bench.py` times a resident Qwen3-ASR |
 | `prof/` | rocprofv3 capture, stage summaries, and ISA inspection |
-| `serving/` | HTTP serving benchmarks |
+| `serving/` | HTTP serving benchmarks; `serve-diff.py` replays one HTTP session against two servers and compares their replies |
 | `ds4/` | DeepSeek-specific validation and experiments |
 | `qwen27b/` | Qwen27B/DFlash2 kernels, reference checks, and vision validation |
 | `qwen-flash/` | Flash-Next projection and MoE microbenchmarks |
-| `h3/` | MiniMax inventory and quality-artifact commands |
 | `audio/` | Audio reference and quality tools |
 | `ci/` | Repository, dependency, and documentation checks |
-| `llama_parity/` | Regenerates the llama.cpp tool-grammar verdicts `json_constraint_test` replays |
 | `gufo/` | Shared Python helpers and model-specific reference implementations |
 
 `gufo/gguf.py` reads metadata and decodes existing GGUF tensors for independent
-Qwen reference tests. `gufo/safetensors.py` validates source snapshots used by
-MiniMax's manifest and quality tooling. Both support model verification.
+Qwen reference tests; `gufo/safetensors.py` validates safetensors snapshots.
 
-See [performance commands](../docs/PERFORMANCE.md),
-[benchmark methodology](../docs/BENCHMARKS.md), and
-[MiniMax validation](../docs/models/minimax-h3/QUALITY.md).
+See [performance commands](../docs/PERFORMANCE.md) and
+[benchmark methodology](../docs/BENCHMARKS.md).
 
 Functional and regression tests live in [tests/functional/](../tests/functional/README.md),
 including the OpenAI SDK suites and interrupted-chat/disk replay. Use its runner
 for API changes.
 
+`nix develop` provides the reference and client tools (its PyTorch brings its
+own ROCm libraries).
+Build and measure the Rust binary outside it, against the ROCm the A/B
+baselines use (see [Gufo in Rust](../docs/RUST.md#build)).
+
 ## Qwen27B
 
-`qwen27b/check.py` owns the focused checks (`fast`, `kernels`, `model`, `serving`).
-Its optional `reference` suite compares target logits with an explicitly
-provided BF16 artifact. `qwen27b/drafts.py` compares Q4/Q8/BF16 DFlash2 companions and refuses
+`qwen27b/check.py` owns the focused checks (`fast`, `kernels`, `model`, `serving`),
+run outside `nix develop`. `qwen27b/drafts.py` compares Q4/Q8/BF16 DFlash2 companions and refuses
 incomplete or mismatching results. `--baseline-binary` interleaves two releases
 and also requires identical autoregressive token traces between them.
 `qwen27b/dflash_gemm_bench.hip` measures exact BF16, Q4/Q5/Q6/Q8 and IQ4_XS
-matrix geometries using the production templates; build it with `tools/bench/build.sh` inside Nix.
+matrix geometries using the production templates; build it with `tools/bench/build.sh`.
 This benchmark uses the production `-O2` optimization level. `q3` and `iq4-nl`
 also cover native fourteen/sixteen-position FFNs, for example
 `q3 17408 5120 24 16` or `iq4-nl 17408 5120 24 14`.
@@ -68,7 +68,7 @@ Injection repeats one weight matrix and uses the production cache hint
 (`bf16 1024 5120 24 16` covers K/V); decoding rotates at least 128 MiB of weights.
 `qwen27b/deltanet_bench.hip` checks exact recurrence and state-only replay
 while rotating the 144 MiB target state; `qwen27b/prefill_deltanet_bench.hip`
-contains the separate prefill ablations. Both use the same fast Nix builder.
+contains the separate prefill ablations. Both build with `tools/bench/build.sh`.
 `qwen27b/attention_bench.hip` compares scalar and batched attention. It checks exact outputs
 beside component timings, including the 4K split-K boundary; its `rope` mode
 compares separate and fused draft normalization/RoPE.

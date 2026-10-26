@@ -1,0 +1,26 @@
+[package]
+name = "gufo-deepseek-v4-flash-kernels"
+version = "0.0.0"
+description = "DeepSeek V4 Flash HIP kernels behind generated, checked launchers and their Rust routing"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The package holds the Rust sources, their tests and the kernel contract.
+include = ["Cargo.toml", "build.rs", "launch.toml", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-deepseek-v4-flash-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

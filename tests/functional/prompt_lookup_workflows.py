@@ -85,8 +85,8 @@ def unfence(text):
 
 def source_archive():
     """Varied tracked project code, with file boundaries, rather than padding."""
-    paths = sorted((ROOT / "src/models/qwen38_flash_next").glob("*.cpp"))
-    paths += sorted((ROOT / "tests/models/qwen38_flash_next").glob("*.cpp"))
+    paths = sorted((ROOT / "src/models/qwen38_flash_next/src").glob("*.rs"))
+    paths += sorted((ROOT / "src/models/qwen38_flash_next/tests").glob("*.rs"))
     paths += sorted((ROOT / "src").rglob("*.hpp"))
     return "\n\n".join(f"FILE {p.relative_to(ROOT)}\n{p.read_text()}" for p in paths)
 

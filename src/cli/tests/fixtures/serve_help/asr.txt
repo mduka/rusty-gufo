@@ -1,0 +1,24 @@
+Usage: gufo serve asr [OPTIONS]
+
+Serve Qwen3-ASR transcription.
+
+Model:
+  -m, --model <DIR>          Qwen3-ASR 1.7B model directory
+  -c, --context <N>          Context capacity per audio chunk (default: 1024)
+      --served-model-name <NAME> Public API model ID
+
+Server:
+  -i, --host <IP>            Bind address
+  -p, --port <N>             Port to listen on
+      --max-connections <N>  Maximum simultaneous HTTP connections
+      --max-request-bytes <N> Maximum HTTP request body bytes
+      --api-key <KEY>        API key
+      --arbiter <HOST:PORT>  Report to this gufo arbiter and follow its GPU grants
+      --sse-ping-interval <N> Seconds a stream may stay silent before a ping (-1 disables)
+
+Logging:
+      --log-level <LEVEL>    Log verbosity: error, warn, info or debug (default: info)
+  -v, --verbose              Shorthand for --log-level=debug
+
+General:
+  -h, --help                 Print help

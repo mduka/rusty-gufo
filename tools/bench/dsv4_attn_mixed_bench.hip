@@ -12,7 +12,7 @@
 // the delta is that phase's contribution to the critical path. Results are only
 // meaningful together: the ablations are not correct kernels.
 //
-//   nix develop -c tools/bench/build.sh dsv4_attn_mixed_bench
+//   tools/bench/build.sh dsv4_attn_mixed_bench
 //   /tmp/dsv4_attn_mixed_bench [n_tokens]
 //
 #include <hip/hip_fp16.h>

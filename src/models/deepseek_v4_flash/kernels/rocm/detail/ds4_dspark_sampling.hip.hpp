@@ -3,7 +3,7 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 
-#include "src/models/deepseek_v4_flash/runtime/model.h"
+#include "src/models/deepseek_v4_flash/kernels/rocm/dspark_candidates.h"
 
 // These kernels return only eight corrected logits per request. No additional
 // full-vocabulary logits/probability buffer is needed.

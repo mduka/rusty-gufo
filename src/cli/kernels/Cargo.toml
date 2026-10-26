@@ -1,0 +1,21 @@
+[package]
+name = "gufo-cli-kernels"
+version = "0.0.0"
+description = "HIP kernels of the gufo diagnostics behind generated, checked Rust launchers"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-cli-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

@@ -1,9 +1,4 @@
 #include "backend.h"
-#include <hipblaslt/hipblaslt.h>
-
-/* The process-wide logger lets the loading lines below honor --log-level
- * instead of writing straight to stderr. */
-#include "src/cli/serve/logging.hpp"
 
 /* Vendored llama.cpp quantized-matmul tier. It owns the routed IQ2 gate/up and
  * dense Q8 prefill kernels; see mmq/VENDOR.md. */
@@ -22,9 +17,6 @@ extern "C" int ds4_hip_q8_fold_take_q81(
 
 #define FULL_WARP_MASK 0xFFFFFFFFFFFFFFFFULL
 #define MASK_T uint64_t
-#define DS4_GPU_BACKEND_NAME "ROCm"
-#define DS4_GPU_LOG_PREFIX "ds4: ROCm "
-#define DS4_GPU_BLAS_NAME "hipBLAS"
 
 #include <stdint.h>
 #include <ctype.h>
@@ -43,9 +35,6 @@ extern "C" int ds4_hip_q8_fold_take_q81(
 #include <unordered_map>
 #include <vector>
 
-#include "resident_api.h"
-#include "src/core/hip/managed_alloc.hpp"
-#include "src/core/hip/weight_upload.hpp"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -60,13 +49,7 @@ enum {
     DS4_ROCM_ATTENTION_RAW_SCORE_CAP = 256u
 };
 
-struct ds4_gpu_tensor {
-    void *ptr;
-    uint64_t bytes;
-    int owner;
-};
-
-#include "detail/ds4_rocm_runtime.hip.hpp"
+#include "detail/ds4_rocm_constants.hip.hpp"
 
 #include "detail/ds4_rocm_common.hip.hpp"
 
@@ -88,13 +71,11 @@ struct ds4_gpu_tensor {
 
 #include "detail/ds4_rocm_matmul.hip.hpp"
 
-#include "detail/ds4_rocm_fp8_kv_launch.hip.hpp"
 
 #include "detail/ds4_rocm_compressor.hip.hpp"
 
 #include "detail/ds4_rocm_attention_launch.hip.hpp"
 
-#include "detail/ds4_rocm_shared_expert.hip.hpp"
 
 #include "detail/ds4_rocm_misc_launch.hip.hpp"
 #include "detail/ds4_rocm_router.hip.hpp"
@@ -104,3 +85,6 @@ struct ds4_gpu_tensor {
 #include "detail/ds4_rocm_moe_launch.hip.hpp"
 
 #include "detail/ds4_rocm_hc_output_launch.hip.hpp"
+
+// The launchers of launch.toml, which the generated Rust wrappers call.
+#include "launch.hip.hpp"

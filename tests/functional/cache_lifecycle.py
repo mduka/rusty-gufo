@@ -334,7 +334,8 @@ def main():
     if int(option(command, "--context", "0")) < 32768:
         parser.error("cache lifecycle requires --context at least 32768")
     if not args.fault_library.is_file():
-        parser.error("build the CMake cache_disk_faults target and pass its library")
+        parser.error("build tests/functional/cache_disk_faults.cpp as in tests/functional/README.md "
+                     "and pass its library")
     args.fault_library = args.fault_library.resolve()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)

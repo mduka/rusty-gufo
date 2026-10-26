@@ -45,9 +45,8 @@ single-line squash merge.
 ## Version policy
 
 Release versions follow Semantic Versioning. The compatibility surface is the
-documented command-line interface, HTTP API and public Nix flake outputs. A
-change is breaking when an existing documented use must be changed to keep
-working.
+documented command-line interface and HTTP API. A change is breaking when an
+existing documented use must be changed to keep working.
 
 Before `1.0.0`, Gufo uses this policy:
 
@@ -71,11 +70,13 @@ of the release version.
 the Conventional Commit history after the latest release and opens or updates
 one release pull request. That pull request updates `version.txt`,
 `CHANGELOG.md` and the release manifest. It receives the same CI as any other
-change, plus the complete Devlab functional suite on Strix Halo (other pull
-requests run its smaller PR tier). The workflow waits up to 160 minutes for the
-pull request title, the repository checks and `devlab/functional`. If any of
-them fails, errors or is still pending, it leaves the pull request open without
-publishing a release and comments on it to notify the maintainers.
+change. The workflow waits up to 40 minutes for the pull request title and the
+repository checks. If any of them fails, errors or is still pending, it leaves
+the pull request open without publishing a release and comments on it to notify
+the maintainers. Hosted CI has no gfx1151: run `tools/ci/check-rust.sh --full`
+and the functional suites ([tests/functional](../tests/functional/README.md)) on
+Strix Halo against `main` before the release workflow runs. The release pull
+request changes only the version, changelog and manifest.
 
 After the checks pass, the workflow squash-merges the release pull request and
 immediately creates the immutable tag and GitHub Release. A manually dispatched
@@ -83,15 +84,13 @@ run follows the same process and is available for recovery. Do not edit the
 version, changelog or release manifest in an ordinary feature or fix pull
 request.
 
-Nix keeps release identity and source identity separate. The default package is
-a development build and reports `gufo version development (<revision>)`.
-Official artifacts build the `release` package from a `vX.Y.Z` tag and report
-`gufo version X.Y.Z (<revision>)`. Both package outputs retain the exact flake
-revision; only the explicitly selected release output reads the semantic version
-from `version.txt`.
+The build keeps release identity and source identity separate. `cargo build`
+reads both from the environment: without it, the binary is a development build
+and reports `gufo version development (unknown)`. Official artifacts build from
+a `vX.Y.Z` tag with the semantic version from `version.txt` and the exact
+revision, and report `gufo version X.Y.Z (<revision>)`:
 
-After Release Please creates a GitHub Release, the same workflow sends its exact
-`vX.Y.Z` tag to the Toolboxes repository. Toolboxes builds the release package
-from that tag and publishes OCI images tagged `X.Y.Z`, `X.Y` and `latest`.
-Rolling Toolboxes images remain separate: they follow Gufo `main` and use `edge`
-and `sha-<revision>` tags.
+```sh
+GUFO_RELEASE_VERSION=$(cat version.txt) GUFO_REVISION=$(git rev-parse HEAD) \
+  cargo build --release -p gufo
+```

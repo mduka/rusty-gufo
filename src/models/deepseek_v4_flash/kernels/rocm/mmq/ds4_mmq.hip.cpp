@@ -48,7 +48,9 @@ static void *ds4_hip_persistent_scratch_reserve_locked(
         size_t granularity,
         hipStream_t stream,
         const char *tag) {
-    if (!scratch || bytes == 0 || stream != (hipStream_t)0) return nullptr;
+    /* gufo: DS4 issues every MMQ call on one stream (ds4_gpu_set_stream), so
+     * the shared scratch is ordered on any stream, not only the legacy one. */
+    if (!scratch || bytes == 0) return nullptr;
     if (scratch->ptr && scratch->bytes >= bytes) return scratch->ptr;
     if (granularity == 0 || bytes > SIZE_MAX - (granularity - 1u)) {
         return nullptr;
@@ -417,7 +419,7 @@ int ds4_mmq_dense_impl(
     ds4_ggml_hip_pool_alloc<char> src1_q8_1_pool;
     char *src1_q8_1 = nullptr;
     std::unique_lock<std::mutex> dense_scratch_lock;
-    if (stream == (hipStream_t)0) {
+    {
         dense_scratch_lock =
             std::unique_lock<std::mutex>(g_hip_dense_q81_scratch.mutex);
         src1_q8_1 = (char *)ds4_hip_persistent_scratch_reserve_locked(
@@ -1201,8 +1203,7 @@ int ds4_mmq_moe_pair_impl(
         ids_dst = (int32_t *)ids_dst_raw;
         expert_bounds = (int32_t *)expert_bounds_raw;
     } else {
-        if (stream == (hipStream_t)0 &&
-            (uint64_t)ne_get_rows <=
+        if ((uint64_t)ne_get_rows <=
                 (SIZE_MAX / sizeof(int32_t) - (size_t)n_experts - 1u) / 2u) {
             pair_map_scratch_lock =
                 std::unique_lock<std::mutex>(g_hip_pair_map_scratch.mutex);

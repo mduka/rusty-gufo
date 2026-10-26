@@ -5,7 +5,7 @@ Status: implemented subset, 2026-09-25
 ## Purpose
 
 The server exposes a focused OpenAI-compatible API while keeping inference,
-scheduling, and device execution in the C++ process. Compatibility is a
+scheduling, and device execution in the Rust process. Compatibility is a
 versioned contract: supported fields behave as documented, and unsupported
 fields return explicit errors.
 
@@ -27,7 +27,7 @@ The only supported production platform is Linux x86-64 on Strix Halo.
 
 ## Implementation
 
-The C++20 runtime uses bounded HTTP/1.1 requests, one connection worker per
+The Rust runtime uses bounded HTTP/1.1 requests, one connection worker per
 request, and a separate inference scheduler. Connections close after each
 response. Chat Completions and Responses support Server-Sent Events; socket closure
 propagates cancellation to the scheduler. JSON parsing rejects duplicate keys,
@@ -47,22 +47,19 @@ The executable provides subcommands rather than separate inference binaries:
 gufo serve
 gufo chat
 gufo prompt
-gufo video
 gufo transcribe
 ```
 
 `chat` and `prompt` are transport adapters over the same scheduler and may
-either load the runtime directly or connect to a running server. `video`
-executes the direct MiniMax H3 route used by the asynchronous video worker.
+either load the runtime directly or connect to a running server.
 `transcribe` executes the native Qwen3-ASR-1.7B route used by the synchronous
 audio transcription endpoint.
-Their detailed contracts are defined in [Command-Line Interface](CLI.md) and
-[MiniMax H3 upstream contract](models/minimax-h3/QUALITY.md).
+Their detailed contracts are defined in [Command-Line Interface](CLI.md).
 
 ### HIP execution
 
-Qwen HTTP requests share one immutable `QwenGpuModel` containing the mapped
-weights and tokenizer. Each request leases a preallocated `QwenGpuExecutor`
+Qwen HTTP requests share one immutable `gufo_qwen35::engine::Model` containing
+the mapped weights and tokenizer. Each request leases a preallocated `Session`
 with independent KV, recurrent, graph, activation, and logit state.
 `--sessions N` controls the bounded execution session pool, not the number of
 remembered conversations. Checkpoints have separate entry and memory limits;
@@ -122,9 +119,9 @@ DeepSeek's 0.95 top-p is its agentic recommendation; neutral penalties and
 disabled unspecified filters are Gufo defaults.
 
 ```sh
-nix build
+cargo build --release -p gufo
 
-./result/bin/gufo serve \
+./target/release/gufo serve \
   --host 127.0.0.1 \
   --port 8080 \
   --sessions 1 \
@@ -134,8 +131,7 @@ nix build
 ```
 
 Cancellation preserves successfully executed state for continuation; failed
-model operations invalidate mutable state. Model replacement is transactional,
-so active requests retain their original model until their lease ends.
+model operations invalidate mutable state.
 Generation responses include:
 
 ```text
@@ -198,9 +194,7 @@ written to disk. A resized 1920×1080 screenshot takes about 6 MiB of RGB storag
 plus its encoded bytes. The compressible test screenshots fit 21 entries in
 this budget; larger encoded files reduce that count. Warm history still pays
 for prompt rendering, tokenization and the existing pixel/position identity
-hash; a new screenshot still needs vision encoding and prefill. Debug logs
-expose `event=image_cache` with whether reuse is enabled, entries, retained
-pixel/encoded bytes, hits, misses and evictions.
+hash; a new screenshot still needs vision encoding and prefill.
 
 `--cache-ram-bytes 0` (the default) selects an automatic snapshot budget capped
 at 32 GiB and half the available host RAM after model/state allocation, respecting
@@ -210,24 +204,13 @@ movable pages, not GPU allocations. 27B also checks HIP free memory. A
 positive value sets a byte cap that may exceed the automatic budget, up to the
 available host RAM minus 4 GiB; the startup line reports both as
 `automatic_bytes` and `max_bytes`.
-On Qwen27B and Flash-Next, the pinned disk staging buffer comes out of that ceiling, and
-`max_bytes` excludes it. Other models' disk staging and temporary disk-save
-buffers are separate from this RAM budget.
+Disk staging and temporary disk-save buffers are separate from this RAM budget.
 The 128 checkpoint records are independent of `--sessions`; more than one can
 belong to a conversation.
-Qwen27B and Qwen3.8-Flash-Next pin pages for up to about 89% of its budget as captures
-need them, about 1 GiB at a time, and keeps them; the rest covers cache metadata as
-it grows. The first step runs at startup and later ones on a background thread
-ahead of need. Each takes about 200 ms while the host has free pages and longer
-when the kernel must reclaim page cache. Segments use ordinary pages that are
-registered with HIP: `hipHostMalloc` asks for high-order pages, and compacting
-host memory for them stalled decode for seconds when most RAM belonged to the GPU.
-Growth stops early while the host would keep less than 4 GiB available. The pages hold checkpoint state and KV rows, partial
-tails and idle-session spill; there is no separate spill option.
-Other models allocate payloads only when captured. Under pressure, optional
-copies give way before another conversation's last useful checkpoint.
+Payloads are allocated only when captured. Under pressure, optional copies
+give way before another conversation's last useful checkpoint.
 
-Qwen27B uses component-cache slots in both AR and DFlash2 modes. A checkpoint
+Qwen27B retains checkpoints in both AR and DFlash2 modes. A checkpoint
 includes target KV and recurrent state, image-prefix identity, sampled frontier
 and pending output tokens. DFlash2 also retains its independently positioned
 ring KV, pending target features and draft controller state. Completed prefill
@@ -273,26 +256,7 @@ encoding scratch is still allocated per image.
 `SIGINT` and `SIGTERM` cancel active requests and drain accepted disk writes
 before exiting. `--cache-disk DIR` defaults to 8 GiB retained on disk.
 
-On Qwen27B and Flash-Next, `--cache-disk-bytes` counts every file the cache manages,
-including temporary files of unfinished writes and files a crash left
-unreferenced. Restarting with a lower budget removes those first, then the
-oldest checkpoints by creation order, until the directory fits; use history does not
-survive a restart. One Qwen27B or Flash-Next server owns the directory: a second one fails
-at startup, after loading its model but before committing its RAM budget, with
-an ownership error naming the directory. The lock does not wait: a restarted
-server fails if its predecessor is still draining disk writes when the new one
-finishes loading its model. Other models do not take this lock.
-The first start on a directory written by an earlier release removes its old
-checkpoint files (`*.kvc`), and the cache refills as conversations run. Do not
-share a directory with another model server; the component cache removes
-their checkpoint and temporary files too, including writes in progress.
-Qwen27B and Flash-Next ignore `--cache-disk-staging-bytes` and logs
-`event=option_ignored`. Writes and restores stream each checkpoint through an
-internal 1 MiB pinned buffer, piece by piece; a larger buffer did not change
-restore or write speed and took pinned RAM and device heap from the cache and
-the sessions. Remove the option from Qwen27B and Flash-Next command lines.
-
-For DeepSeek, `--cache-disk-staging-bytes 0` (the default) selects the
+`--cache-disk-staging-bytes 0` (the default) selects the
 smaller of one eighth of available host RAM after model/session loading
 (including cgroup limits) and the disk budget. This bounds queued
 captures/writes and each disk read separately; it allocates nothing upfront.
@@ -301,8 +265,10 @@ Snapshots that exceed either limit are skipped with their required size and
 available budget logged; live conversation reuse remains available. Existing
 files that exceed the current staging limit are preserved subject to disk LRU
 eviction and can be reused after restarting with sufficient staging.
-Qwen27B streams large checkpoints through the same fixed 1 MiB staging buffer;
-`--cache-disk-bytes` still needs to fit the retained checkpoints.
+For Flash-Next/MTP at full 262K context, explicitly set
+`--cache-disk-staging-bytes 8589934592` (8 GiB) if RAM permits.
+Qwen27B at full context needs larger staging and `--cache-disk-bytes` limits;
+use the required size reported in the skip log.
 
 For a focused cancellation check, run
 `python3 tests/functional/continuation.py --output /tmp/cache-check.json`
@@ -348,12 +314,12 @@ follows `--log-level` like the rest of the startup diagnostics; the
 | `serve llm` | 2 | 3 |
 | `serve tts` | 1 | 2 |
 | `serve asr` | 1 | 2 |
-| `serve image`, `serve video`, `serve embedding` | runtime default | up to 5 |
+| `serve image`, `serve embedding` | runtime default | up to 5 |
 
 Text and audio caps are measured to cost no throughput: `serve llm` is flat from
 the runtime default down to a single queue at one and at four concurrent
-requests, and both audio servers are flat within run-to-run noise. Image,
-video, and embedding are unmeasured, so they keep the runtime default
+requests, and both audio servers are flat within run-to-run noise. Image
+and embedding are unmeasured, so they keep the runtime default
 unless the device is too busy to hold it.
 
 The cap is only ever lowered to fit the free slots, never raised to fill them,
@@ -362,6 +328,15 @@ so a server's throughput does not depend on the order the servers started. A
 checked: a cap of N resolves to at most N + 1 resident queues, so a value that
 will not fit is reported even though it is honoured. When a server cannot fit,
 it logs a `queue_budget_exceeded` warning and starts anyway.
+
+### Sharing the GPU with other servers
+
+Servers on one device compete for it: beside text generation, streamed speech
+falls below real time. With `--arbiter HOST:PORT` a server reports to a
+`gufo arbiter`, which throttles text generation while a streamed TTS falls
+behind; the text scheduler then pauses between steps for its grant. Without
+the option nothing of this runs. [Sharing the GPU](ARBITER.md) describes the
+rules, the protocol and the measurements.
 
 ### Reasoning controls
 
@@ -391,6 +366,15 @@ precedence. Request budgets must fit a signed 32-bit integer; Messages budgets
 must also be positive. The server does not automatically reserve part of
 `max_tokens` for the answer: clients must set a smaller reasoning budget when
 they need that room.
+
+`--api-compat llama.cpp` follows llama.cpp where its request semantics differ
+from Gufo's: Messages with `thinking.type` `enabled` and no `budget_tokens`
+get a 10000-token budget, a Responses `reasoning` input item without readable
+text is ignored, and the Responses `reasoning` object passes unknown members
+while checking `summary` (`auto`, `concise` or `detailed`). The default,
+`gufo`, keeps the server budget, accepts `reasoning` input items only in the
+shape the server emits (encrypted content is rejected) and rejects `reasoning`
+members other than `effort` and `summary`.
 
 Keep `reasoning_effort` (Chat) or `output_config.effort` (Messages) consistent
 across turns while thinking is enabled: Qwen and DeepSeek render the effort
@@ -475,10 +459,6 @@ cache snapshots. HTTP handlers do not implement model kernels.
 | `POST` | `/v1/audio/speech` | A TTS implementation is compiled and loaded |
 | `POST` | `/v1/images/generations` | Qwen-Image-2.1 image serving is configured |
 | `POST` | `/v1/images/edits` | Qwen-Image-2.1 image serving is configured |
-| `POST` | `/v1/videos` | A validated operator-supplied MiniMax H3 checkpoint is configured |
-| `GET` | `/v1/videos/{id}` | MiniMax H3 video serving is configured |
-| `GET` | `/v1/videos/{id}/content` | The requested MiniMax H3 job completed |
-| `DELETE` | `/v1/videos/{id}` | MiniMax H3 video serving is configured |
 
 Use `gufo serve image --model SNAPSHOT_DIR` for
 [Qwen-Image-2.1](models/qwen-image-2.1/README.md). Generation accepts JSON;
@@ -491,7 +471,7 @@ Qwen3-TTS serving is enabled with a dedicated model process. All three 12Hz
 fields that are required:
 
 ```sh
-./result/bin/gufo serve --port 8080 tts \
+./target/release/gufo serve --port 8080 tts \
   --model /persist/models/audio/Qwen3-TTS-12Hz-1.7B-CustomVoice
 ```
 
@@ -517,7 +497,7 @@ so clients select a speaker by name instead of uploading a reference clip on
 every request:
 
 ```sh
-./result/bin/gufo serve tts \
+./target/release/gufo serve tts \
   --model /persist/models/audio/Qwen3-TTS-12Hz-1.7B-Base \
   --voice narrator_eng=/persist/models/audio/clear-english-voice.wav \
   --voice narrator_ita=/persist/models/audio/clear-italian-voice.wav
@@ -528,7 +508,7 @@ every request:
 appear before or after its matching `--voice`:
 
 ```sh
-./result/bin/gufo serve tts \
+./target/release/gufo serve tts \
   --model /persist/models/audio/Qwen3-TTS-12Hz-1.7B-Base \
   --voice narrator_ita=/persist/models/audio/clear-italian-voice.wav \
   --voice-text "narrator_ita=Questo racconto e' cresciuto..." \
@@ -579,7 +559,7 @@ event, while WebSocket speech reports an error without `audio.done`.
 Qwen3-ASR serving uses its own model process:
 
 ```sh
-./result/bin/gufo serve asr \
+./target/release/gufo serve asr \
   --model /var/llms/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots/<revision>
 ```
 
@@ -598,39 +578,15 @@ bounded to 4 MiB, queued input to 8 MiB/128 messages, and unconsumed output to
 a five-second socket timeout. Native generation observes close/disconnect;
 no per-server streaming flag or extra model is required.
 
-The MiniMax H3 subset follows the asynchronous OpenAI-style video resource
-shape and is versioned independently as `gufo.video-api.v1`. Its supported
-fields, frozen presets, queue behavior, and deliberate conditioning
-omissions are documented in the [H3 upstream contract](models/minimax-h3/QUALITY.md).
-Create requests accept both `application/json` and OpenAI-client-compatible
-`multipart/form-data`; duplicate form fields, malformed boundaries, unsupported
-media types, and reference-image parts fail explicitly.
-H3 accepts `seconds` as a JSON number or string (including multipart), at
-`512x512` or `1344x768`. Durations from 5 seconds are converted to 24-fps frames
-and rounded up to the official VAE grid (`17n + 5`), within upstream's
-15-second ceiling: 5 → 124 frames, 10 → 243, 14 → 345. The maximum is
-`14.375` seconds (345 frames); `15` would round to 362 frames and is rejected,
-as upstream does. An explicit `gufo.frames` must match the aligned duration.
-The one-second/22-frame diagnostic extension remains available.
-The encoder accepts at most 4,096 tokens after tokenization and normalization.
-There is no 4,096-byte prompt limit. HTTP request bodies remain bounded by
-`--max-request-bytes`; token-limit violations fail the asynchronous job before
-prompt-encoder weights or activations are allocated.
-The bounded worker retains prompt text only in volatile queued or active
-request memory, persists only its SHA-256 digest, and wipes both source and
-active string storage after transfer and completion. Completed MP4s are probed
-for H.264/AAC codec, geometry, rates, duration, and A/V synchronization before
-atomic publication.
-
 ## Embeddings
 
 EmbeddingGemma 2 (`google/embeddinggemma-2`) serves text embeddings from its own model process.  It is a 768-dimension, BF16, 8192-token-context encoder:
 
 ```sh
-./result/bin/gufo serve --port 8080 embedding --model /persist/models/embeddinggemma-2
+./target/release/gufo serve --port 8080 embedding --model /persist/models/embeddinggemma-2
 ```
 
-`--model` must name an EmbeddingGemma 2 checkpoint directory, and `--served-model-name` overrides the default model ID `embeddinggemma-2`.  The process refuses to start on any other directory and in a build without the HIP backend.  There is no `--sessions` or `--context` option, because requests share one encoder.  Concurrent requests take turns in arrival order, one device batch of up to 8,192 tokens per turn, so a short request waits for at most one batch of a long one.  Route this process through llama-swap when one public URL should offer embeddings alongside text, speech, or images.
+`--model` must name an EmbeddingGemma 2 checkpoint directory, and `--served-model-name` overrides the default model ID `embeddinggemma-2`.  The process refuses to start on any other directory.  There is no `--sessions` or `--context` option, because requests share one encoder.  Concurrent requests take turns in arrival order, one device batch of up to 8,192 tokens per turn, so a short request waits for at most one batch of a long one.  Route this process through llama-swap when one public URL should offer embeddings alongside text, speech, or images.
 
 `POST /v1/embeddings` follows the OpenAI request shape:
 
@@ -672,7 +628,7 @@ The response holds one embedding per input in request order:
 ## Internal Request Model
 
 Text endpoints use `ChatRequest` and `SamplingConfig` at the
-[backend boundary](../src/cli/serve/text_generation_backend.hpp).
+[backend boundary](../src/cli/serve/src/backend.rs).
 Chat messages retain roles, reasoning, tool calls and image content until the
 model's tokenizer and template turn them into model input. The scheduler owns
 request limits, cancellation, cache accounting and completion state.
@@ -722,8 +678,22 @@ Responses report `incomplete` with reason `max_output_tokens` when generation
 hits its limit. Otherwise they report `completed`. `stream: true` sends typed
 SSE events with consecutive `sequence_number` values: lifecycle, output items,
 text/reasoning deltas and terminal status. Local reasoning is exposed as
-`reasoning` items with `summary_text`; visible answers use `output_text`.
+`reasoning` items with `summary_text` (by default, see below); visible answers
+use `output_text`.
 Disconnects cancel generation through the same scheduler as Chat Completions.
+
+`--responses-reasoning-target` selects where a `reasoning` item carries the
+raw reasoning text; no summary is generated in any target:
+
+| Target | Item | Events |
+| --- | --- | --- |
+| `summary` (default) | one `summary_text` part in `summary` | `response.reasoning_summary_part.added`/`.done`, `response.reasoning_summary_text.delta`/`.done` |
+| `reasoning-text` (OpenAI, llama.cpp) | one `reasoning_text` part in `content`, `summary: []`, empty `encrypted_content` | `response.content_part.added`/`.done`, `response.reasoning_text.delta`/`.done` |
+| `reasoning` (Open Responses) | as `reasoning-text` | `response.content_part.added`/`.done`, `response.reasoning.delta`/`.done` |
+
+Reasoning items in `input` become the thought of the assistant message that
+follows them: Gufo reads their `reasoning_text` content, else their summary
+text.
 
 The official [OpenAI Python SDK](https://github.com/openai/openai-python) is
 included in `nix develop`. Use the model name from `/v1/models`
@@ -956,8 +926,9 @@ first constrained request to startup (Flash-Next: 248,320 tokens, about 30 ms).
 The vocabulary stays resident even if no request is constrained. The startup
 line `event=structured_output_prepared` reports `vocabulary_tokens`, `prepare_ms`
 and `rss_delta_kib`. Runners without structured output skip preparation and
-retain ordinary text serving; vocabulary build errors still fail startup.
-Grammars and their masks are unchanged.
+retain ordinary text serving; a vocabulary build error also skips it, and the
+first constrained request reports the error. Grammars and their masks are
+unchanged.
 
 `</think>` ends reasoning before constrained JSON. Native tools also accept an
 unquoted function header as the boundary when the model omits `</think>`.
@@ -985,7 +956,12 @@ Unsupported keywords, external references and unusable cycles are rejected.
 Schemas are limited to 2 MiB, 5,000 properties, 1,000 enum values and 120,000
 characters in names and enum/const strings. Patterns use ECMA-262 Unicode
 semantics; lookbehind, backreferences, inline flags and unbounded repetition
-of assertions are unsupported.
+of assertions are unsupported. Unicode property escapes cover the General
+Categories, `Any`, `ASCII`, `Assigned` and the binary properties Alphabetic,
+Lowercase, Uppercase, White_Space, ASCII_Hex_Digit, Hex_Digit,
+Noncharacter_Code_Point, Join_Control, Regional_Indicator and
+Pattern_White_Space; scripts, blocks and other properties are rejected (the
+C++ server resolves them through ICU).
 
 Function `strict:true` constrains tool arguments independently of the response
 schema. Chat Completions and Responses preserve the supplied parameter schema
@@ -1011,12 +987,12 @@ Verify with `tests/functional/openai_sdk.py --suite tools`,
 
 ## Model Discovery
 
-`GET /v1/models` lists the configured text model and ready audio, video,
+`GET /v1/models` lists the configured text model and ready audio,
 image, and embedding services. Entries provide `id`, `object`, `created` and `owned_by`; the text
 entry also provides `context_length` and `architecture.input_modalities`: `["text"]`
 for text-only serving or `["text", "image"]` when a vision encoder is loaded.
 Image support reflects the loaded projector, not the model name; launching a
-vision-capable model without its projector advertises text only. Audio/video
+vision-capable model without its projector advertises text only. Audio
 entries describe their capability. Send the returned model ID in requests.
 Text requests naming another model return 404.
 
@@ -1045,7 +1021,8 @@ Use appropriate HTTP status codes:
 - `429` admission queue full or rate limit exceeded
 - `499` internally recorded client cancellation
 - `500` internal failure
-- `503` model or backend unavailable, or GPU context lost (`device_lost`)
+- `503` model or backend unavailable, GPU context lost (`device_lost`), or
+  scheduler failed (`scheduler_failed`)
 
 Generation stops at the request budget or context capacity and reports a
 length finish reason when either limit is reached.
@@ -1058,7 +1035,7 @@ The server binds to `127.0.0.1` by default. Set `--api-key` to require:
 Authorization: Bearer <local-token>
 ```
 
-Authentication covers every route, including health, metrics, audio, and video.
+Authentication covers every route, including health, metrics, audio, and images.
 CORS preflight (`OPTIONS`) does not require credentials. Select the listen
 address with `--host`; it must be a numeric IPv4 or IPv6 address, not a host
 name. `--host ::` is dual-stack: it accepts IPv6 clients and IPv4 clients, and
@@ -1145,6 +1122,15 @@ loss permanent for the process:
   stops it after the loss. Teardown can block on the dead device, so the
   process exits with status 75 after 10 s regardless.
 
+A panic on the scheduler thread (a bug, not a device fault) takes the same
+path with its own code: it logs `event=scheduler_failed remedy=restart
+reason=<panic message>`, every resident and queued request fails with 503
+`scheduler_failed` (`text generation scheduler failed; restart required`,
+no `Retry-After`), new submissions are refused, health and readiness report
+`{"status":"scheduler_failed",...}`, and `gufo serve` logs
+`event=scheduler_failed_shutdown` and exits with status 70 (`EX_SOFTWARE`),
+after 10 s regardless. The C++ server terminates in this case.
+
 A device call that never returns is a different failure: nothing fails, so
 nothing is probed, and the server keeps answering `/health` and sending stream
 heartbeats while generation has stopped. `--stall-timeout-ms MS` bounds that.
@@ -1172,7 +1158,9 @@ appropriate 5xx status; device loss is 503 `device_lost`. Later failures, even
 before the first token, use terminal SSE errors. Heartbeats begin once headers
 commit, so long prefills and queue waits keep sending bytes. Explicit
 `return_progress: true` sends headers immediately and adds live prefill
-progress.
+progress. A heartbeat is a `: ping` comment after 15 seconds without output;
+llama-server's `--sse-ping-interval N` sets the seconds, and `-1` or `0`
+disables heartbeats.
 
 `/metrics` exposes `gufo_device_lost_total`, incremented once per confirmed
 context loss, including idle detection. It stays unchanged for recoverable
@@ -1258,8 +1246,7 @@ interface, and in-process recovery after device reset or suspend/resume.
 Server lifecycle and request logs go to stderr. Each request gets an
 `X-Request-ID` response header matching its `request=rN` log entries. Inference
 requests log receipt and completion; streaming completion is logged after the
-stream ends. Successful health/metrics and video-status polls are quiet at the
-default level.
+stream ends. Successful health/metrics polls are quiet at the default level.
 
 Set verbosity with `--log-level <error|warn|info|debug>` (default `info`);
 `-v`/`--verbose` is shorthand for `--log-level=debug` and cannot combine with
@@ -1297,16 +1284,13 @@ The `debug` tier adds:
   about to overwrite. A request that finds every slot busy emits its skip
   records once, so a long wait does not repeat them on every 10ms poll.
 
-Loader phases stay at INFO: the weight-mapping and session-preallocation work is
-HIP-only code, so deeper sub-phases there need a GPU build to verify and are not
-part of this tier. The imported DeepSeek V4 Flash runtime logs through the same
-threshold rather than writing to stderr directly, so its informational startup
-lines (the ROCm model-cache and managed-KV lines, DSpark attachment, the shared
-batch workspace) are suppressed by `--log-level=warn`/`error` too.
+Loader phases stay at INFO. The DeepSeek V4 Flash runtime writes its
+informational startup lines (the ROCm model-cache and managed-KV lines, DSpark
+attachment, the shared batch workspace) to stderr directly, so
+`--log-level=warn`/`error` does not suppress them.
 
 Prompt text, message bodies and API keys stay unlogged at every level, and debug
-lines use the same escaping and redaction as the rest of the log. Only the
-opt-in [content trace](#content-trace), a separate file, records content. Client
+lines use the same escaping and redaction as the rest of the log. Client
 identity is the exception: scheduler admission lines name a client by the peer
 address of its socket (`client_id=127.0.0.1` on the default loopback bind), so a
 public `--host` writes client IP addresses into the debug tier.
@@ -1318,50 +1302,6 @@ speed. Speculative requests also include accepted and proposed drafts. Progress
 lines are INFO-tier: `--log-level=warn` or `--log-level=error` would discard
 them, so the server rejects that combination at startup instead of ignoring the
 flag.
-
-### Content trace
-
-Some failures only show in the content itself, such as tool-call markup leaking
-into `content` or a history that the template renders differently. For those,
-start `gufo serve llm` with `--trace <PATH>`. The server appends one JSON
-object per line to `PATH` and logs `event=trace_enabled` at WARN. A new file is
-created readable and writable by its owner only; an existing file keeps its
-permissions. A path that cannot be opened fails startup before the model loads.
-
-Each request to `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
-`/v1/messages` or `/completion` writes three records. Every record has `time`,
-`event` and the `request` id shown in the `X-Request-ID` header and in the
-`request=rN` log lines:
-
-- `request`: `method`, `path` and the `body` as received.
-- `generation`, written by the scheduler shared by every text model: its
-  `generation` number (the `request=` value of scheduler debug and progress
-  lines), `max_tokens` after clamping to the context, the effective `sampling`,
-  `prompt_tokens`, `cache` (`memory`, `disk` or `miss`), `cached_tokens`, the
-  miss detail the completion log also reports, `generated_tokens`, `finish`,
-  `error` when generation failed, the `prompt` decoded from its tokens with
-  special tokens spelled out, and the raw `output` before reasoning and
-  tool-call parsing.
-- `response`: `status`, `outcome`, whether the reply was a `stream`, and the
-  `body` the client received. For a stream this is the event stream as
-  written, `: ping` keepalives included, so a difference between streaming and
-  non-streaming parsing shows up in the trace.
-
-A request that fails before generation, for example with invalid JSON, has
-no `generation` record. Requests refused before routing (malformed HTTP or an
-oversized body), unauthenticated requests and other routes are not traced.
-Malformed UTF-8 is replaced with U+FFFD. A record that cannot be written in
-full, for example on a full disk, is cut from the file and the first failure is
-logged as `event=trace_write_failed`; a file that cannot be cut back, such as a
-pipe, stops tracing with `event=trace_disabled`. To read one request:
-
-```sh
-jq 'select(.request == "r12")' trace.jsonl
-```
-
-The file holds prompts, tool results and generated text in full: treat it
-like the conversations themselves and delete it when done. It is never
-rotated or truncated.
 
 Text completion logs include stop/length/cancellation, queue and first-token
 latency, prefill/decode speed, execution width, memory/disk cache hits and reused
@@ -1388,27 +1328,29 @@ speculative mode and memory. `rss_mib` is process resident memory;
 `host_available_mib` is available system memory. At load completion,
 `gpu_device_used_mib` is device-wide HIP usage. These overlap on unified memory
 and must not be added together.
-With disk caching enabled, `phase=artifact_identity` identifies full-file
-SHA-256 work. Digests are cached against the open file's identity, size and
+With disk caching enabled, loading hashes the full model files with SHA-256.
+Digests are cached against the open file's identity, size and
 modification/change timestamps; unchanged artifacts avoid another scan.
 Startup qualification measures process launch through first prefill and first
 token, including work deferred until the first request.
 
 Audio summaries include model, duration and generation/transcription timings.
-Video requests log a job ID linking queue, start, throttled phase progress and
-completion/failure events. Video startup validates inventory; weights load
-lazily in the worker. Control characters are escaped in log lines.
+Control characters are escaped in log lines.
 
 ## Focused checks
 
-- `json_test`: number precision, Unicode escapes, malformed input and depth limits.
-- `http_server_test`: transport framing, authentication, compatibility validation,
-  sampling forwarding, request logs at the default and debug tiers, and streaming
-  failures without loading a model.
-- `serve_cli_test`: executable help, argument wiring and rejected configurations,
-  including that `--log-level` and `-v` change the emitted log rather than only
-  parsing.
-- `openai_chat_test`: chat parsing, streaming, images, tools and sampling controls.
+- `cargo test -p gufo-core --lib json`: number precision, Unicode escapes,
+  malformed input and depth limits.
+- `cargo test -p gufo-serve --test http_server --test http_logging`: transport
+  framing, authentication, compatibility validation, sampling forwarding,
+  request logs at the default and debug tiers, and streaming failures without
+  loading a model.
+- `cargo test -p gufo --test serve` and
+  `python3 tests/cli/serve_test.py target/gpu-test/gufo`: executable help,
+  argument wiring and rejected configurations, including that `--log-level`
+  and `-v` change the emitted log rather than only parsing.
+- `cargo test -p gufo-serve --test openai_chat`: chat parsing, streaming,
+  images, tools and sampling controls.
 - Per-model serving tests: greedy/sampled decoding, batching, cache reuse and
   cancellation. Use the affected model's benchmark README for commands and limits.
 
@@ -1428,5 +1370,6 @@ DSpark's short boundary check is available without the complete serving suite:
 
 ```sh
 # Set GUFO_DEEPSEEK_V4_FLASH_MODEL and GUFO_DEEPSEEK_V4_FLASH_DSPARK_MODEL first.
-nix develop -c build/gpu-test/tests/models/deepseek_v4_flash/ds4_serving_test --dspark-eos
+cargo test --profile gpu-test -p gufo-deepseek-v4-flash --features gpu,models \
+  --lib eos -- --ignored
 ```

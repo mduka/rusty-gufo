@@ -28,7 +28,7 @@
 // accumulation order is preserved; fusing dispatches and deepening the unroll
 // both leave each row's summation order untouched.
 //
-//   nix develop -c tools/bench/build.sh asr_decode_gemv_bench
+//   tools/bench/build.sh asr_decode_gemv_bench
 //   /tmp/asr_decode_gemv_bench [token_passes]
 
 #include <hip/hip_bfloat16.h>

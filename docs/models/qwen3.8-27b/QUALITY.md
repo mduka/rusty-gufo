@@ -240,6 +240,50 @@ acceptance, full-vocabulary residual correction, nonfinite inputs and replay.
 replay requires the same configuration. GPU/CPU distributions have numerical
 tolerances, not bit-identical upstream sampler parity.
 
+## Draft lookup, penalties and verification schedules
+
+Draft probabilities change where the request has numeric penalties or the
+draft copies its prompt history; the target distribution, p/q acceptance and
+residual correction do not. The Rust checks:
+
+- Prompt lookup (`src/models/qwen35/tests/dflash.rs`): greedy copies open
+  after 12 matching tokens only once adaptive neural acceptance has dropped,
+  after 24 under the fixed policy, and replay after memory and persistent
+  restore. Sampled copies need 24 generated tokens, report point mass and
+  consume no draft RNG; a continuation crossing `<|im_end|>` selects an
+  earlier source, while real thinking and tool tokens stay copyable. A new
+  request cannot resume the previous answer's copy, a v3 payload restores
+  without lookup state, and lookup positions beyond the restored history are
+  refused. The shared index's source filter and resume requirement have
+  their own tests (`gufo_core::prompt_lookup`); Flash-Next's default source
+  selection is unchanged.
+- Penalized cohorts: two to eight sessions at distinct positions,
+  temperatures and fixed/adaptive policies, with repeat, frequency and
+  presence penalties, keep each session's tokens, selector probabilities,
+  draws and persistent state byte for byte against drafting alone.
+- Draft q (`src/models/qwen35/tests/sampling.rs`): eight penalty policies,
+  including repeat-window expiry and negative penalties, match an
+  independent CPU distribution conditional on the earlier drafts, and every
+  draft lies inside its reported CDF. Bounded top-k candidates equal the
+  full GPU sort and an independent stable CPU order for vocabularies of
+  1,023 to 248,320 tokens, top counts 1 to 64, ties, signed zeros and
+  nonfinite logits.
+- Verification projections (`src/models/qwen/kernels/tests/small_batch.rs`):
+  five-token IQ4_XS and three/four/eight-token Q4_K rows on the 27B gate/up
+  and down shapes equal the decode GEMV byte for byte, with no write past
+  their rows.
+- Final prefill tile (`src/models/qwen35/tests/prefill.rs`, kernel test
+  `attention.rs`): logits and continued cache state equal a forced
+  full-layer capture for 2,048 rows at depth 0 and 1,025 rows behind 8,192
+  cached tokens, with and without DFlash2 taps; the WMMA attention's
+  retained rows equal the full call's bytes across packed head groups, and
+  skipped rows stay untouched. The DFlash2 step fixtures hold; the Q4 haiku
+  fixture records the C++ engine's copied verse at the same output.
+
+The benchmark tables are upstream's measurements of the C++ engine; the Rust
+engine's timing against it is in
+[Gufo in Rust](../../RUST.md#performance-against-upstream).
+
 ## Vision
 
 Earlier Q4/Q8 AR and DFlash2 checks cover multi-image, sampled/greedy C4,
@@ -253,7 +297,17 @@ Q4/Q8 image snapshots restored after cancellation inside the image encoder or
 text prefill match all target logits exactly; token-limit endings and stripped
 tool reasoning retain the compatible conversation prefix.
 
+Snapshots keep only the images their context consumed, so a request that
+appends an image restores the earlier checkpoint. A prefill cancellation check
+that never fires keeps the logits bit for bit; one that fires inside the layer
+stack stops the prefill, and the reset session prefills exactly again
+(`src/models/qwen35/tests/prefill.rs`).
+
 ## Autoregressive component checkpoints
+
+These checks qualify upstream's component cache (`src/cache`) in the C++
+engine. The Rust engine keeps its own continuation cache instead
+([Gufo in Rust](../../RUST.md#implemented-differently)).
 
 October 10, 2026: the model-local component adapter passes Q4/Q8 checks in
 both FP16 and FP32 attention KV layouts. Every restored component byte and
@@ -268,8 +322,8 @@ Production FP16 probes at 32K and 100K also match every restored byte and
 sixteen continuation logit rows/token decisions after transfer to another slot.
 These are Gufo execution-consistency checks. They do not extend upstream or
 weight-conversion parity, qualify alternate BF16 recurrence, or qualify the
-common checkpoint allocator. The [adapter inventory and commands](CONTINUATION-ADAPTER.md)
-and [card 15 results](../../cache-redesign/cards/15-qwen27b-ar-adapter.md)
+common checkpoint allocator. The [adapter inventory and commands](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/models/qwen3.8-27b/CONTINUATION-ADAPTER.md)
+and [card 15 results](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/cache-redesign/cards/15-qwen27b-ar-adapter.md)
 record the scope and retained evidence.
 
 ## Long-context FP32 attention qualification (2026-10-13)
@@ -292,15 +346,21 @@ qualification result. Matched-main timing flags remain open. All original aborts
 
 ## Reproduce
 
-Run only the affected [model suite](../../../tools/qwen27b/check.py):
+Run only the affected [model suite](../../../tools/qwen27b/check.py), outside
+`nix develop`:
 
 ```sh
-nix develop -c python3 tools/qwen27b/check.py fast
-nix develop -c python3 tools/qwen27b/check.py reference \
-  --model "$MODEL" --reference-model "$BF16_REFERENCE"
-nix develop -c python3 tools/qwen27b/check.py serving \
-  --model "$MODEL" --dflash-model "$DRAFT"
+python3 tools/qwen27b/check.py fast
+python3 tools/qwen27b/check.py kernels
+python3 tools/qwen27b/check.py serving --model "$MODEL" --dflash-model "$DRAFT"
+python3 tools/qwen27b/check.py model --model "$MODEL" --mtp-model "$MTP" \
+  --dflash-model "$DRAFT" --mmproj "$MMPROJ"
 ```
+
+The comparison against a BF16 reference GGUF (the former `reference` suite,
+which produced `artifacts/quantization-quality.json`) ran in the C++ test
+`qwen27b_target_test`; an upstream v0.23.0 checkout keeps it. The Rust engine
+reproduces the C++ logits bit for bit, so the recorded result stands.
 
 [Draft oracle](../../../tools/qwen27b/dflash_reference.py),
 [vision oracle](../../../tools/qwen27b/vision_reference.py) and

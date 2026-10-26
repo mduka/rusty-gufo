@@ -11,6 +11,7 @@ This is a consistency check, not a legal compliance determination.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -25,23 +26,32 @@ REQUIRED_SHIPPED_COMPONENTS = {
     "hipCUB",
     "rocPRIM",
     "rocWMMA",
-    "OpenSSL",
-    "libpng",
-    "libjpeg-turbo",
-    "libwebp",
+    "ureq / rustls / ring",
+    "png / zune-jpeg / image-webp",
+    "unicode-normalization / unicode-properties",
+    "sha2 / sha1_smol",
+    "Other Rust crates",
     "DS4",
-    "h3.c",
-    "ccv TensorOps ancestry",
     "llama.cpp / ggml",
-    "ICU",
-    "curl / libcurl",
-    "FFmpeg",
 }
+
+# Crates of the shipped rows above that Cargo.lock must pin.
+REQUIRED_LOCKED_CRATES = (
+    "ureq",
+    "rustls",
+    "ring",
+    "png",
+    "zune-jpeg",
+    "image-webp",
+    "unicode-normalization",
+    "unicode-properties",
+    "sha2",
+    "sha1_smol",
+)
 
 REQUIRED_EVALUATION_COMPONENTS = {
     "PyTorch ROCm",
     "Torchvision",
-    "LPIPS",
     "ROCprofiler SDK / ROCTx",
 }
 
@@ -78,7 +88,7 @@ def parse_third_party_notices(notices_path: Path) -> Dict[str, Dict[str, str]]:
 
 def verify_dependencies(
     notices_file: Path,
-    package_nix_file: Path,
+    cargo_lock_file: Path,
     flake_nix_file: Path,
     json_report_path: Path = None,
 ) -> int:
@@ -97,26 +107,22 @@ def verify_dependencies(
                 f"{notices_file.name}"
             )
 
-    # 2. Check package.nix inputs consistency
-    for nix_file in (package_nix_file, flake_nix_file):
-        if not nix_file.is_file():
-            errors.append(f"Dependency source {nix_file} does not exist")
-    if package_nix_file.is_file():
-        pkg_content = package_nix_file.read_text(encoding="utf-8")
-        # Check the runtime inputs required by the shipped GPU package.
-        for dep in [
-            "rocmPackages",
-            "icu",
-            "curl",
-            "ffmpeg-headless",
-        ]:
-            if dep not in pkg_content:
-                errors.append(f"Expected dependency '{dep}' missing from {package_nix_file.name}")
+    # 2. Check that Cargo.lock pins the crates of the shipped rows. ROCm is
+    # the installed one, so no file pins it.
+    for source in (cargo_lock_file, flake_nix_file):
+        if not source.is_file():
+            errors.append(f"Dependency source {source} does not exist")
+    if cargo_lock_file.is_file():
+        locked = set(re.findall(r'^name = "([^"]+)"$',
+                                cargo_lock_file.read_text(encoding="utf-8"), re.MULTILINE))
+        for crate in REQUIRED_LOCKED_CRATES:
+            if crate not in locked:
+                errors.append(f"Expected crate '{crate}' missing from {cargo_lock_file.name}")
 
     # 3. Check evaluation-only dependencies in the pinned development shell.
     if flake_nix_file.is_file():
         flake_content = flake_nix_file.read_text(encoding="utf-8")
-        for dep in ("ps.torchWithRocm", "ps.torchvision", "ps.lpips"):
+        for dep in ("ps.torchWithRocm", "ps.torchvision"):
             if dep not in flake_content:
                 errors.append(
                     f"Expected evaluation dependency '{dep}' missing from "
@@ -124,9 +130,7 @@ def verify_dependencies(
                 )
         for binding in (
             "torch = ps.torchWithRocm",
-            "torchvision = torchvisionRocm",
-            "alexnet-owt-7be5be79.pth",
-            "TORCH_HOME",
+            "torchvisionRocm = ps.torchvision.override",
         ):
             if binding not in flake_content:
                 errors.append(
@@ -179,9 +183,9 @@ def main() -> int:
         help="Path to THIRD_PARTY_NOTICES.md",
     )
     parser.add_argument(
-        "--package-nix",
-        default=".devops/nix/package.nix",
-        help="Path to package.nix",
+        "--cargo-lock",
+        default="Cargo.lock",
+        help="Path to Cargo.lock",
     )
     parser.add_argument(
         "--flake-nix",
@@ -196,12 +200,12 @@ def main() -> int:
     args = parser.parse_args()
 
     notices_path = Path(args.notices)
-    package_nix_path = Path(args.package_nix)
+    cargo_lock_path = Path(args.cargo_lock)
     flake_nix_path = Path(args.flake_nix)
     report_path = Path(args.json_report) if args.json_report else None
 
     return verify_dependencies(
-        notices_path, package_nix_path, flake_nix_path, report_path
+        notices_path, cargo_lock_path, flake_nix_path, report_path
     )
 
 

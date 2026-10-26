@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gufo",
         type=Path,
-        default=Path("result/bin/gufo"),
+        default=Path("target/release/gufo"),
         help="release gufo binary containing native Qwen3-ASR",
     )
     parser.add_argument(

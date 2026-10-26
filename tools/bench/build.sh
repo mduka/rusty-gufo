@@ -1,37 +1,23 @@
 #!/usr/bin/env bash
 # Compile the standalone gfx1151 microbenchmarks with hipcc.
 #
-# hipcc invokes the raw HIP clang++, not the Nix cc wrapper, so the include and
-# library search paths that `nix develop` exports through NIX_CFLAGS_COMPILE /
-# NIX_LDFLAGS have to be forwarded explicitly.
+# Built like the kernel crates build their kernels: compiler, headers and
+# runtime from one ROCm prefix ($ROCM_PATH, else /opt/rocm/core, else /usr)
+# and the host GCC's installation, outside `nix develop` (whose ROCm differs).
 #
-#   nix develop -c tools/bench/build.sh [name ...]
+#   tools/bench/build.sh [name ...]
 #
 # With no arguments every *.hip under tools/bench is built into /tmp.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# shellcheck disable=SC2206
-read -r -a cflags <<<"${NIX_CFLAGS_COMPILE:-}"
-read -r -a ldflags <<<"${NIX_LDFLAGS:-}"
-
-inc=()
-for f in "${cflags[@]}"; do
-  case "$f" in
-    -isystem | -I) ;;
-    /*) inc+=("-isystem" "$f") ;;
-    -I*) inc+=("$f") ;;
-  esac
-done
-lib=()
-for f in "${ldflags[@]}"; do
-  case "$f" in
-    -L | -rpath) ;;
-    /*) lib+=("-L$f" "-Wl,-rpath,$f") ;;
-    -L*) lib+=("$f") ;;
-  esac
-done
+rocm=${ROCM_PATH:-/opt/rocm/core}
+[ -x "$rocm/bin/hipcc" ] || rocm=/usr
+hipcc=${HIPCC:-$rocm/bin/hipcc}
+gcc=$(dirname "$("${CC:-cc}" -print-libgcc-file-name)")
+inc=(--rocm-path="$rocm" -isystem"$rocm/include" --gcc-install-dir="$gcc")
+lib=(-L"$rocm/lib" -Wl,-rpath,"$rocm/lib")
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
@@ -53,7 +39,7 @@ for t in "${targets[@]}"; do
     extra+=(-lhipblas -lhipblaslt -lrocblas)
   fi
   echo "==> $src -> $out"
-  compile=(hipcc -O3 --offload-arch=gfx1151 -std=c++20
+  compile=("$hipcc" -O3 --offload-arch=gfx1151 -std=c++20
     -I. "${inc[@]}" -Rpass-analysis=kernel-resource-usage)
   if [[ "$src" -ef tools/qwen27b/dflash_gemm_bench.hip ]]; then
     # Exact projection comparisons use the production compiler optimization level.
@@ -67,10 +53,6 @@ for t in "${targets[@]}"; do
   fi
   if [[ "$src" -ef tools/qwen27b/prefill_gemm_bench.hip ]]; then
     native_sources+=(src/models/qwen/hip/kernels/prefill_quant_wave64.hip)
-  fi
-  if [[ "$src" -ef tools/qwen27b/attention_bench.hip ]]; then
-    native_sources+=(
-      src/models/qwen/hip/kernels/attention_decode_verify_wave64.hip)
   fi
   if ((${#native_sources[@]})); then
     # HIP helpers and their callers must share the native wave size.
@@ -90,12 +72,7 @@ for t in "${targets[@]}"; do
           -c "$unit" -o "$object" || exit 1
         native_objects+=("$object")
       done
-      if [[ "$src" -ef tools/qwen27b/prefill_gemm_bench.hip ]]; then
-        "${compile[@]}" -c src/core/quant/ggml_dequant.cpp \
-          -o "$objects/quant.o" || exit 1
-        native_objects+=("$objects/quant.o")
-      fi
-      hipcc --offload-arch=gfx1151 "${lib[@]}" \
+      "$hipcc" "${inc[@]}" --offload-arch=gfx1151 "${lib[@]}" \
         "$objects/main.o" "${native_objects[@]}" "${extra[@]}" -o "$out"
     ) 2>"/tmp/${t}.build.log" ||
       { tail -40 "/tmp/${t}.build.log"; exit 1; }

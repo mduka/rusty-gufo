@@ -17,7 +17,13 @@ Unused NVIDIA/MUSA preprocessing paths, ggml graph support and full ggml
 tensor entry points are removed; DS4 owns its HIP graph execution separately.
 
 When importing upstream changes, retain the HIP implementation and rerun the
-focused DS4 projection/attention checks through Nix. The backend and all six
+focused DS4 projection/attention checks
+(`tests/models/deepseek_v4_flash/run_operator_checks.sh`). The backend and all six
 matrix translation units were also compared before and after preprocessing
 for `gfx1151`; only private symbol names and unsupported-kernel diagnostics
 changed. Current measurements belong in the model benchmark README.
+
+Gufo changes after the import: the persistent dense and pair-map scratches
+in `ds4_mmq.hip.cpp` serve every stream, not only the legacy default stream,
+since DS4 orders all its MMQ calls on the one stream of its runtime
+(`ds4_gpu_set_stream`).

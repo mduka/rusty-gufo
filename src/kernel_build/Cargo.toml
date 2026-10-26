@@ -1,0 +1,17 @@
+[package]
+name = "gufo-kernel-build"
+version = "0.0.0"
+description = "Build-script support: hipcc compilation and launch.toml code generation"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gufo-formats.workspace = true
+jobserver.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

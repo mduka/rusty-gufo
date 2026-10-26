@@ -4,7 +4,7 @@
 #include <algorithm>
 
 #include "src/models/qwen_image_21/hip/bf16.hpp"
-#include "src/models/qwen_image_21/hip/runtime.hpp"
+#include "src/models/qwen_image_21/hip/ops.hpp"
 
 namespace gufo::models::qwen_image_21::hip {
 namespace {

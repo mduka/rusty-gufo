@@ -1,19 +1,29 @@
 # Text API functional tests
 
 The runner starts an isolated local server and checks real responses with the
-OpenAI SDK. Use production binaries and local weights; no models are downloaded.
+OpenAI SDK. Use production binaries (`cargo build --release -p gufo`, then
+`target/release/gufo`) and local weights; no models are downloaded.
 
 Qwen 27B deep-history recovery uses separate, explicitly selected workloads:
 
 ```sh
 python3 tests/functional/deep_peers_qwen.py \
   --binary /path/to/production/gufo --model /path/to/qwen27b.gguf \
-  --mode ar --source-revision BUILD_SHA --expect-component --out /tmp/qwen-deep
+  --mode ar --source-revision BUILD_SHA --out /tmp/qwen-deep
 python3 tests/functional/over_ram_qwen.py \
   --binary /path/to/production/gufo --model /path/to/qwen27b.gguf \
   --mode dflash2 --draft /path/to/dflash2.gguf \
-  --source-revision BUILD_SHA --expect-component --out /tmp/qwen-over-ram
+  --source-revision BUILD_SHA --out /tmp/qwen-over-ram
 ```
+
+These runners, and `publication_wait.py`, `cache_startup.py`,
+`cache_lifecycle.py --require-over-ram`, `image_history.py` and
+`qwen_prefill_cancel.py --deep-peers`, still read upstream's component-cache
+log lines and usage fields (`schema=component-cache-v1`, `event=published`,
+`usage.gufo.component_cache`), which the Rust continuation cache does not
+write ([differences](../../docs/RUST.md#implemented-differently)). They fail
+against this build until they read its `event=disk_cache`,
+`event=snapshot_cache_configured` and `event=publication_wait` lines.
 
 Each starts its own loopback server, retains responses, loaded mode, actual draft
 counts and process/host memory samples, and removes only its owned disk cache
@@ -90,8 +100,7 @@ nix develop -c python3 tests/functional/generation_quality.py \
 
 The reports contain `code` and `code-think` entries from `chat_result`, including
 text and finish reason. This executes the reviewed generated Python on the
-development host. The requests and measurement scope are recorded in the
-[Qwen27B quality notes](../../docs/models/qwen3.8-27b/QUALITY.md#october-21-coding-and-prose-follow-up).
+development host.
 
 `prompt_lookup_workflows.py` checks extraction, generated URI tests and edits
 after a long source archive against an already running Flash-Next MTP server:
@@ -139,12 +148,12 @@ use its target weights, and select `--speculative off` or
 Commands, startup times, request timings, responses and logs
 remain in the output directory. This check stays outside hosted model CI.
 
-The cluster workflow uses [impact.json](impact.json) to select suites from changed
-paths. Inspect a plan locally without running Gufo:
+[impact.json](impact.json) selects suites from changed paths. Inspect a plan
+locally without running Gufo:
 
 ```sh
 python3 tests/functional/impact.py --model flash-next-q4 \
-  src/models/qwen38_flash_next/continuation_adapter.cpp
+  src/models/qwen38_flash_next/src/checkpoint.rs
 ```
 
 `--repo PATH --base SHA --head SHA` reads a Git diff instead. Renames retain both
@@ -163,63 +172,42 @@ final parse a buffered reply uses, and `tool-native-schemas` rotates endpoint,
 stream and tool choice across cases. `--tier full` (the default for manual runs)
 keeps every suite and combination.
 
-`Devlab functional checks` runs on every push to a non-draft PR, like `CI`
-(`pull_request`), and fork PRs follow the same repository approval policy; a
-newer push cancels the PR's earlier run. PRs run the `pr` tier; release-please
-PRs and dispatches (unless they choose `tier: pr`) run `full`. Maintain/Admin users can also dispatch
-it with a PR number. It pins
-the event's PR head and merge base on `main`, plans on a hosted runner,
-and allocates the cluster only for affected Flash-Next MTP coverage (or an
-explicit benchmark request). AR suites run only when a dispatch sets `ar`, which
-plans with `--model flash-next-q4`; the default is `--model flash-next-q4/mtp`.
-`--model` accepts a model or a single `model/mode` profile. The workflow, harness
-and production binary all come from the PR, as in `CI`.
-While it builds, it fetches the pinned Q4 shards, MTP sidecar and vision projector
-in the background into a persistent
-cache under `$GUFO_CI_CACHE` (default `$RUNNER_TOOL_CACHE/gufo`; the weights need
-about 110 GiB free), and retains reports and selection reasons as artifacts.
-Weight and `ccache` reuse depend on the cluster preserving that directory on the
-allocated machine. The job also builds the merge base. After the suites,
-`phases.py` alternates base and PR servers (two arms each, after GPU cool-down)
-through startup and a cold, long and follow-up MTP request, and the comment draws
-each phase as a Mermaid pipeline colored by its paired verdict: a phase is slower
-or faster only when every repeat moves by more than 5% and 3 ms. A benchmark
-request also runs the same AR sweep on the merge base first, so the report shows
-per-depth deltas. Both are observations, not qualified timing regressions.
+No hosted workflow runs these suites: they need the gfx1151 and local weights.
+`cluster.py` executes a Flash-Next plan locally, with the Q4 shards, MTP sidecar
+and vision projector under `--weights` in the Hugging Face repository layout:
 
-The cluster installs the client from `requirements.txt`, pinned to the flake's
-versions, because newer unpinned SDKs break every suite inside the client. Keep it
-covering every third-party import here; the install step imports the harness
-to catch gaps.
+```sh
+python3 tests/functional/impact.py --model flash-next-q4/mtp --tier pr \
+  --repo . --base main --head HEAD --output /tmp/functional-plan.json
+python3 tests/functional/cluster.py --plan /tmp/functional-plan.json \
+  --binary target/release/gufo --weights /path/to/Qwen3.8-Flash-Next-GGUF \
+  --output /tmp/functional-results
+```
 
-A hosted `report` job then renders results, failure log tails and benchmark
-deltas into the run summary. For branches in this repository and dispatches it
-also updates a single PR comment and sets the `devlab/functional` commit status.
-A fork PR's token is read-only, so the job uploads the rendered report and
-`devlab-comment.yml` publishes it from a `workflow_run` in the base repository,
-without checking out PR code. While any PR run is in progress, the same
-workflow keeps a placeholder in that comment with a link to cancel the run.
-It only runs from `main`. The check
-is advisory on PRs, so a broken cluster never blocks an ordinary merge; the
-automatic release merge requires it (see [releasing](../../docs/RELEASING.md)). Suite
-failures report `failure`; cluster or harness problems (authorization, build,
-download, cancellation) report `error`. The PR write token stays on the hosted
-runner.
+`phases.py` alternates base and candidate servers (two arms each, after GPU
+cool-down) through startup and a cold, long and follow-up MTP request; a phase
+is slower or faster only when every repeat moves by more than 5% and 3 ms. These
+are observations, not qualified timing regressions.
+
+Install the client from `requirements.txt`, pinned to the flake's versions,
+because newer unpinned SDKs break every suite inside the client. Keep it
+covering every third-party import here.
 
 `cluster.py` executes each configuration group with a fresh server/cache history
 and continues to other groups after a failure, removing each group's disk cache
 once it finishes. Candidate correctness uses
 `--record-baseline` to capture observations; this does **not** qualify timing
-regressions. Failures fail the cluster job. Deferred cache rollout suites,
+regressions. Failures fail the run. Deferred cache rollout suites,
 other-model coverage, numerical checks and agent-client replays remain named
-qualification obligations rather than being counted as passes. This workflow
+qualification obligations rather than being counted as passes. The executor
 currently covers only Flash-Next, including for shared changes.
 
-Planner and executor checks are CPU-only:
+Planner, runner and cache workload checks are CPU-only and run in hosted CI:
 
 ```sh
 python3 -m unittest discover -s tests/functional -p test_impact.py
-python3 -m unittest discover -s tests/functional -p test_report.py
+python3 -m unittest discover -s tests/functional -p test_runner.py
+python3 -m unittest discover -s tests/functional -p test_cache_workloads.py
 ```
 
 
@@ -239,14 +227,15 @@ It fails if no loading answer was observed, so an instant load is not a pass.
 hosted model CI and `--suite all`.
 
 Device-loss process tests use a separate opt-in runner because each lost-device
-case must terminate its server. Build its CMake-owned preload helper, then run
-against a production binary and one explicitly selected model/mode:
+case must terminate its server. Build its preload helper, then run against a
+production binary and one explicitly selected model/mode:
 
 ```sh
-nix develop -c cmake --preset cpu-test
-nix develop -c cmake --build --preset cpu-test --target device_loss_faults
+mkdir -p target/functional
+c++ -std=c++20 -O2 -fPIC -shared tests/functional/device_loss_faults.cpp \
+  -o target/functional/libdevice_loss_faults.so -ldl -pthread
 python3 tests/functional/device_loss.py \
-  --fault-library build/cpu-test/libdevice_loss_faults.so \
+  --fault-library target/functional/libdevice_loss_faults.so \
   --output /tmp/device-loss-check -- \
   /path/to/production/gufo serve llm --model /path/to/model.gguf \
   --sessions 2 --context 4096 --think off --speculative off
@@ -310,16 +299,13 @@ must perform zero drafts. `state-edges` requires actual draft execution when
 enabled, so a loaded-but-unused sidecar cannot qualify that mode. Use the normal
 draft limit for this suite. Audio and image/video generation have separate tests.
 
-Card 01's new cache workloads stay outside routine functional runs until the
-new cache lands in card 19. Both `run.py --suite all` and
-`openai_sdk.py --suite all` exclude `cache-compaction`, `cache-transforms`,
-`cache-pressure` and `cache-messages-loop`. The disk lifecycle runner is
-standalone and is never invoked by `all`. Existing functional suites and the
-passing CPU workload/gate checks remain active. Explicitly selecting a new
-workload still runs its strict assertions and may fail on the legacy cache;
-use that selection only to record a baseline or develop the new cache.
-Card 19 enables these workloads in routine qualification with their required
-RAM, disk and restart settings once their contracts pass.
+Upstream wrote four cache workloads for its component cache (`src/cache`),
+which Gufo in Rust does not use ([differences](../../docs/RUST.md#implemented-differently)).
+Both `run.py --suite all` and `openai_sdk.py --suite all` exclude
+`cache-compaction`, `cache-transforms`, `cache-pressure` and
+`cache-messages-loop`. The disk lifecycle runner is standalone and is never
+invoked by `all`. Explicitly selecting one of the four still runs its strict
+assertions and may fail on the Rust continuation cache.
 
 | Suite | Checks |
 | --- | --- |
@@ -393,9 +379,8 @@ Repeat `--suite` to select affected tests; `--suite all` explicitly runs all. Fo
 contexts, use server `--context 32768`; actual prompt depth is recorded. `cache`
 uses its own 8 GiB disk budget and 1 GiB staging area inside the output directory;
 the runner removes that disk cache when the run ends, keeping reports and logs.
-Flash-Next allocates that staging as pinned host memory at startup, beyond its
-RAM budget, although its default 1 MiB transfer buffer suffices. The runner
-keeps 1 GiB so results stay comparable with retained runs and other models.
+Staging bounds queued captures, writes and each read; it allocates nothing
+upfront, and a checkpoint is staged whole.
 For timing controls on revisions predating progress, use `--allow-missing-progress`
 with `--record-baseline`. Candidate qualification always requires progress events.
 Model runs stay outside hosted CI; CI checks the runner and measurement logic.
@@ -450,9 +435,7 @@ retries require identical output, full prompt reuse and zero prefill. Add
 `--fresh-encoding` to change PNG metadata on each retry while preserving pixels,
 tokens and continuation identity: this measures preprocessing misses without
 GPU prefill. Add `--image /path/to/1920x1080.png` to check a supplied PNG,
-including the digest cost of a larger encoded payload. The native
-`qwen_vision_cache_test --capacity-probe` separately
-checks the default byte ceiling with 22 resized 1080p images.
+including the digest cost of a larger encoded payload.
 
 For real coding-agent regressions, run `pi_agent.py` against a local server with
 `--base-url`, `--model`, `--pi /path/to/pi-0.87.0`, `--server-log`, and a fresh
@@ -569,8 +552,6 @@ and continues the compacted conversation. Cold controls run after every warm
 request. The seed is a genuine model reply; tool calls/results and the summary
 are deterministic client-authored fixtures. This covers compaction mechanics,
 not a real client's summary generation or retention under RAM/disk pressure.
-The [card 01 results](../../docs/cache-redesign/cards/01-functional-coverage.md#results)
-record all scenario families, including failures on the legacy cache.
 
 Run `cache-transforms` with a roomy RAM budget in its own invocation. Its
 retried prompts end with a user turn after a tool result, and Qwen templates
@@ -596,10 +577,11 @@ Disk workloads use a separate runner so their restarts and publication gate
 cannot affect other suites:
 
 ```sh
-nix develop -c cmake --preset cpu-test
-nix develop -c cmake --build --preset cpu-test --target cache_disk_faults
+mkdir -p target/functional
+c++ -std=c++20 -O2 -fPIC -shared tests/functional/cache_disk_faults.cpp \
+  -o target/functional/libcache_disk_faults.so -ldl
 nix develop -c python3 tests/functional/cache_lifecycle.py \
-  --output /tmp/cache-lifecycle --fault-library build/cpu-test/libcache_disk_faults.so -- \
+  --output /tmp/cache-lifecycle --fault-library target/functional/libcache_disk_faults.so -- \
   /path/to/production/gufo serve llm --model /path/to/model.gguf \
   --context 32768 --sessions 1 --think off --speculative off
 ```
@@ -608,7 +590,7 @@ Repeat `--case restart|tiered|oversized|crash|side-traffic` to select cases. `re
 llama-swap stopping and starting a server between turns. `tiered` first warms a
 short RAM prefix after restart, then requests a history with a deeper published
 disk checkpoint. `oversized` uses 1 MiB staging beneath an observed larger
-checkpoint. `crash` uses the CMake-built, child-only preload helper to hold a
+checkpoint. `crash` uses the child-only preload helper to hold a
 private-cache file at `fsync`, verifies queued bytes and the completed HTTP
 request, then SIGKILLs that child. Restart may restore only previously published
 boundaries. The helper is disarmed for initial publication and is covered by
@@ -639,7 +621,7 @@ next round. Cold output controls run after all warm traffic. This covers the
 short-peer/deep-history pattern reported in #542; the system-only oversized
 fixture cannot establish that behavior.
 Known cache-work failures exit nonzero and retain controls/evidence; they are
-not skipped, marked as expected passes, or fixed in this test-only card.
+not skipped or marked as expected passes.
 
 Publication-wait regression #617 uses the same process-local fault library,
 filtered to hold a manifest after its payload is written. It checks both an
@@ -647,7 +629,7 @@ expired recomputation budget and publication before that budget expires:
 
 ```sh
 nix develop -c python3 tests/functional/publication_wait.py \
-  --output /tmp/publication-wait --fault-library build/cpu-test/libcache_disk_faults.so -- \
+  --output /tmp/publication-wait --fault-library target/functional/libcache_disk_faults.so -- \
   /path/to/production/gufo serve llm --model /path/to/flash-next.gguf \
   --mtp-model /path/to/mtp.gguf --speculative mtp --sessions 1 --context 65536
 ```
@@ -678,7 +660,7 @@ alone. For example:
 ```sh
 nix develop -c python3 tests/functional/publication_wait.py \
   --case reclaim --output /tmp/publication-reclaim \
-  --fault-library build/cpu-test/libcache_disk_faults.so -- \
+  --fault-library target/functional/libcache_disk_faults.so -- \
   /path/to/production/gufo serve llm --model /path/to/flash-next.gguf \
   --mtp-model /path/to/mtp.gguf --speculative mtp --sessions 1 --context 65536
 ```

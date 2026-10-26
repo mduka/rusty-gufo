@@ -6,6 +6,8 @@
 
 Gufo is a vertical local inference engine specifically built and optimized for the AMD Strix Halo hardware:
 Ryzen AI MAX+ 395 systems with Radeon 8060S (`gfx1151`), up to 128 GiB of unified memory.
+Its host code is Rust and its GPU kernels are HIP; [Gufo in Rust](docs/RUST.md)
+describes the workspace, its safety checks and how it compares with the C++ engine.
 
 **Contributions are welcome!**
 
@@ -28,13 +30,21 @@ All model documentation lives under [docs/models](docs/models/README.md):
 | [EmbeddingGemma 2](docs/models/embeddinggemma-2/README.md) | Text embeddings | [BF16](https://huggingface.co/google/embeddinggemma-2/tree/914f7f89142e33e77833254d9c9b90c3cef7303b) | Up to **23.9k tokens/s** over HTTP; **20.5 ms** for a 404-token request · [Benchmarks](docs/models/embeddinggemma-2/BENCHMARKS.md) | [Quality](docs/models/embeddinggemma-2/QUALITY.md) |
 | [Qwen3-TTS 1.7B](docs/models/qwen3-tts/README.md) | Speech synthesis and voice cloning | BF16 [CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice) / [VoiceDesign](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign) / [Base](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) | Up to **2.54× realtime**; **201 ms** to first audio (CustomVoice) · [Benchmarks](docs/models/qwen3-tts/BENCHMARKS.md) | [Quality](docs/models/qwen3-tts/QUALITY.md) |
 | [Qwen-Image-2.1](docs/models/qwen-image-2.1/README.md) | BF16 image generation and editing | [Complete pipeline](https://huggingface.co/Qwen/Qwen-Image-2.1/tree/b3179ad355be050328e483a9dfdd9e60cd62adfa) | In progress · [Benchmarks](docs/models/qwen-image-2.1/BENCHMARKS.md) | [Quality](docs/models/qwen-image-2.1/QUALITY.md) |
-| [MiniMax H3](docs/models/minimax-h3/README.md) | BF16 text to video/audio | [FL2VA pipeline](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe/FL2VA) | In progress · [Benchmarks](docs/models/minimax-h3/BENCHMARKS.md) | [Quality](docs/models/minimax-h3/QUALITY.md) |
 
 Peak measured workloads; text pp is autoregressive (AR), while tg uses the
 named speculative mode. Peaks include repetitive output; aggregate tg sums
 individual request decode rates. Qwen27B's single-user peak uses the short-prompt
 C1 workload. Audio excludes loading.
 Each model guide lists the required files and complete benchmark settings.
+
+## Several servers on one GPU
+
+A voice assistant runs a language model, speech synthesis and recognition
+side by side, and on one GPU the language model takes the device: streamed
+speech stutters although the text arrives far ahead of it. `gufo arbiter`
+keeps speech in real time. Servers started with `--arbiter` report to it;
+text generation yields the GPU while a streamed TTS falls behind and runs at
+full speed otherwise. See [sharing the GPU](docs/ARBITER.md).
 
 ## Philosophy
 
@@ -74,6 +84,9 @@ podman run --rm \
   --speculative dflash2 \
   --dflash-model /models/Qwen3.8-27B-DFlash2-GGUF/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
 ```
+
+The image holds upstream's release build (the C++ engine), which takes the
+same command line; this tree builds from source ([below](#build-from-source)).
 
 Rootless Podman needs `crun` for `--group-add keep-groups`. Your host user must
 have read/write access to `/dev/kfd` and `/dev/dri/renderD*`, usually through the
@@ -136,108 +149,55 @@ Reasoning tokens count toward that response limit.
 
 ## Build from source
 
-Linux x86-64 on AMD Strix Halo (`gfx1151`) is the supported target. CMake owns
-one production configuration for both Nix and ordinary Linux builds. Tests,
-profilers, tuning executables and Python reference runners are not installed
-with the production package. No `build.sh` wrapper is needed.
+Linux x86-64 on AMD Strix Halo (`gfx1151`) is the supported target. Gufo is
+a Cargo workspace; `cargo build` produces the one `gufo` binary. Tests,
+profilers and Python reference runners are not part of it.
 
-### With Nix
-
-```sh
-nix build
-./result/bin/gufo diagnose
-./result/bin/gufo serve llm --model /path/to/model.gguf
-```
-
-[flake.lock](flake.lock) pins the dependencies. `nix develop` adds profiling,
-model-download and independent evaluation tools; these are not runtime
-requirements. Optional benchmark baselines are selected separately with
-`nix shell .#ds4-reference`, `.#llama-cpp-reference` or
-`.#llama-cpp-mtp-reference`; see [benchmarking](docs/BENCHMARKS.md).
-See [testing](docs/TESTING.md) for the small hosted CI suite and
-explicit local quality checks.
-
-Prebuilt store paths are published to the `gufo` Cachix cache. The flake
-declares it in `nixConfig`: users listed in `trusted-users` are asked to accept
-it, or pass `--accept-flake-config`. Nix ignores it for other users; add it
-system-wide with `cachix use gufo` or in `/etc/nix/nix.conf`:
-
-```
-extra-substituters = https://gufo.cachix.org
-extra-trusted-public-keys = gufo.cachix.org-1:rfZe3n4lHINgyoACKzs5EthIZmBNvEyCCtufUpth0PE=
-```
-
-The Nix package and development shell include a ROCr 7.2.3
-[queue-memory patch](.devops/nix/patches/rocr-fixed-cwsr.patch) for Strix Halo.
-It keeps queue save/restore buffers, launch/copy arenas and code-loading
-staging resident during host memory compaction, while retaining managed-memory
-support and the ordinary fine-grained host-allocation policy.
-
-`nix build .#rocm10` and `nix develop .#rocm10` build the same source against
-ROCm 10.1.0 (HIP Clang 24) from the open
-[nixpkgs ROCm 10.1 update](https://github.com/NixOS/nixpkgs/pull/573885), with
-the [rebased queue-memory patch](.devops/nix/patches/rocr-fixed-cwsr-rocm10.patch).
-This build is under evaluation and is not qualified; it has no binary cache, so
-the first build compiles the ROCm toolchain and libraries for gfx1151.
-
-### Without Nix
-
-Install a C++20 compiler, CMake 3.21+, Ninja, pkg-config and the
-following development libraries. The currently qualified toolchain is GCC
-15.3 and ROCm 7.2.3. Attention and audio convolution kernels are compiled
-directly from HIP. Python, Triton/AOTriton, Composable Kernel and MIOpen are
-not production build or runtime requirements.
-For the same protection against queue evictions as the Nix build, apply the
-ROCr patch above when building your runtime. Flash-Next's host buffers also use
-Linux long-term pins, with ordinary HIP registration retained when system
-limits disallow those pins. Gufo leaves `HSA_USERPTR_FOR_PAGED_MEM` unchanged.
+Install [rustup](https://rustup.rs) (the toolchain comes from
+[rust-toolchain.toml](rust-toolchain.toml) on first use), a C/C++ toolchain
+for linking (GCC 15 is qualified) and ROCm with the libraries below. The
+qualified ROCm is 10.1.0. Attention and audio convolution kernels are
+compiled directly from HIP; Python, Triton/AOTriton, Composable Kernel and
+MIOpen are not build or runtime requirements.
 
 | Dependency | Used for |
 | --- | --- |
-| ROCm HIP compiler/runtime, hipBLAS, hipBLASLt, rocBLAS | GPU execution and matrix multiplication |
+| ROCm HIP compiler and runtime, hipBLAS, hipBLASLt, rocBLAS | GPU execution and matrix multiplication |
 | hipCUB, rocPRIM, rocWMMA headers | Compiled GPU kernels |
-| ICU, libcurl, OpenSSL, libpng, libjpeg, libwebp | Tokenization, HTTPS, hashing and images |
-| FFmpeg and ffprobe | Video/audio output; invoked as separate executables |
 
 Install ROCm using [AMD's Linux instructions](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/).
-Use the development packages for the libraries above. ROCm normally installs
-under `/opt/rocm`.
-
-For example, on Debian/Ubuntu the ordinary system libraries are:
+The build takes its ROCm from `$ROCM_PATH`, else `/opt/rocm/core`, else
+`/usr`; compiler, headers and runtime must come from that one prefix. On
+Debian/Ubuntu, with AMD's repository:
 
 ```sh
-sudo apt install build-essential cmake ninja-build pkg-config \
-  libicu-dev libcurl4-openssl-dev libssl-dev libpng-dev libjpeg-dev libwebp-dev ffmpeg
-
-# ROCm libraries from the table, named as AMD's repository ships them.
-sudo apt install hipblas-dev hipblaslt-dev rocblas-dev \
+sudo apt install build-essential hipblas-dev hipblaslt-dev rocblas-dev \
   hipcub-dev rocprim-dev rocwmma-dev
 
-cmake --preset release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build --preset release --parallel 4
-./build/release/gufo diagnose
-./build/release/gufo serve llm --model /path/to/model.gguf
+cargo build --release -p gufo
+./target/release/gufo diagnose
+./target/release/gufo serve llm --model /path/to/model.gguf
 ```
 
-Configuring fails at `find_package(hipblas)` when those ROCm packages are
-missing. Other distributions name them `-devel` instead of `-dev`.
-For nonstandard installations, pass ordinary CMake paths, for example
-`cmake --preset release -DCMAKE_PREFIX_PATH="/opt/rocm"`.
-If compiler discovery picks a system Clang, also pass
-`-DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++`.
-Use `cmake --install build/release` to install Gufo,
-its runtime data and license notices. The GPU driver must allow your user to
-access `/dev/kfd` and `/dev/dri`; model weights are acquired separately.
+Other distributions name the packages `-devel` instead of `-dev`. Set
+`GUFO_RELEASE_VERSION` and `GUFO_REVISION` at build time for the version
+`gufo --version` prints. To install, copy `target/release/gufo` onto your
+`PATH`; a link named `gufo-server` starts the server directly. The GPU
+driver must allow your user to access `/dev/kfd` and `/dev/dri`; model
+weights are acquired separately.
 
-The same source, compiler flags and install rules serve both builds. Nix pins
-the complete toolchain for reproducible comparisons; changing the compiler or
-math libraries requires the affected model's quality checks.
+`nix develop` adds profiling, model-download and independent evaluation
+tools; [flake.lock](flake.lock) pins them. Build and measure Gufo outside
+that shell, whose ROCm differs. Optional benchmark baselines are selected
+with `nix shell .#ds4-reference`, `.#llama-cpp-reference` or
+`.#llama-cpp-mtp-reference`; see [benchmarking](docs/BENCHMARKS.md) and
+[testing](docs/TESTING.md).
 
 ## License
 
 Gufo's original code is [MIT licensed](LICENSE). Adapted code and dependencies
 retain their own notices in [NOTICE](NOTICE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-and `licenses/`, installed under `share/licenses/gufo`. Model weights are not
+and `licenses/`; distribute them with the binary. Model weights are not
 bundled and retain their publishers' terms.
 
 ## Reference Projects

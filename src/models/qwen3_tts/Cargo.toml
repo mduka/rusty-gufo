@@ -1,0 +1,30 @@
+[package]
+name = "gufo-qwen3-tts"
+version = "0.0.0"
+description = "Qwen3-TTS 12Hz 1.7B speech synthesis on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The C++ sources, kernels and tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-qwen3-tts --features gpu
+gpu = []
+# Tests that need the checkpoints (see tests/common): --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-hip.workspace = true
+gufo-qwen-kernels = { path = "../qwen/kernels" }
+gufo-qwen3-tts-kernels = { path = "kernels" }
+rustix.workspace = true
+unicode-normalization.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

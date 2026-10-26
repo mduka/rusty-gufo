@@ -12,7 +12,7 @@
 // Operands rotate over three copies so the 32 MB MALL cannot hide a re-read the
 // production run pays cold; see docs/models/deepseek-v4-flash/BENCHMARKS.md.
 //
-//   nix develop -c tools/bench/build.sh dsv4_attn_out_gemm_bench
+//   tools/bench/build.sh dsv4_attn_out_gemm_bench
 //   /tmp/dsv4_attn_out_gemm_bench [n_tokens]
 //
 #include <hip/hip_fp16.h>

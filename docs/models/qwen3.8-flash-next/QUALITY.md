@@ -103,7 +103,7 @@ wrapper's checkout stamp and environment fingerprint are not a replacement
 for that build provenance: 10.1 uses container GCC 15.2 and Clang 24, while
 7.2.3 uses pinned Nix GCC 15.3 and Clang 22.
 
-The [migration state](ROCM.md) records the sampled screen and qualification
+The [migration state](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/models/qwen3.8-flash-next/ROCM.md) records the sampled screen and qualification
 limits. Initial captures, rejected candidates, source patches,
 binary hashes and request traces are retained under
 `/tmp/gufo-rocm10-20261023` on the test host. Sampled text and completion length
@@ -942,7 +942,7 @@ Concurrent setup and maximum-token-gap flags are also retained in the evidence.
 | Seeded MTP cache rebuilding | Two seeds × 200 tokens replay exactly after different prefill splits, cache bypass and replacement. K/V-only prefill and compact catch-up preserve full-head candidates across 1/8/9/32/33-row chunks. [Evidence](artifacts/mtp-cache-replay.json). |
 | Scalar versus bulk prefill, 2176 tokens | Same top-1; logit RMSE 0.18, not bit-identical |
 | Serving | Cancellation, three-turn continuation, reasoning/tool history, concurrent image/text isolation and disk restart pass |
-| Prompt checkpoints | In-pass and borrowed checkpoints restore exactly in AR/MTP, including rewinds, branches, resets and destruction; 14 functional cache jobs pass correctness. [Details](PROMPT-CHECKPOINTS.md) |
+| Prompt checkpoints | In-pass and borrowed checkpoints restore exactly in AR/MTP, including rewinds, branches, resets and destruction; 14 functional cache jobs pass correctness. [Details](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/models/qwen3.8-flash-next/PROMPT-CHECKPOINTS.md) |
 | Sparse attention | Independent FP64 operator error ≤2.83e-7 (limit 1e-6). At 32K/128K, 256 fixed-token code/prose rows: mean KL 5.82e-4 and 256/256 top-1 agreement with an FP64-attention diagnostic. [Evidence](artifacts/attention-tiles-review.json). |
 
 The attention diagnostic retains the quantized weights and other native
@@ -1012,21 +1012,25 @@ context exceeds 262,144 tokens.
 
 ## Reproduce
 
-Tests live in [`tests/models/qwen38_flash_next`](../../../tests/models/qwen38_flash_next).
-Use `--batch-only`, `--sampling-only`, `--prefill-only` or `--cache-only` on the
-session test; the snapshot test covers persistent image/text state.
-
-`--execution-only 133120` runs the focused deep AR/MTP logit and snapshot-replay
-check without the other session suites.
-
-For independent MTP checks:
+The engine runs in Rust. Its session, batch, sampling, prefill, snapshot and
+serving checks live in
+[`src/models/qwen38_flash_next/tests`](../../../src/models/qwen38_flash_next/tests)
+(`quality.rs`, `serving.rs`, `snapshot.rs`; `GUFO_FLASH_NEXT_QUALITY=batch`,
+`prefill`, `cache` or `replay` selects a part of `quality.rs`), its unit checks
+(metadata, n-gram hashing and reads, the MTP policy and proposal sampling)
+next to the code:
 
 ```sh
-nix develop -c cmake --build --preset gpu-test \
-  --target qwen38_flash_next_model_tests qwen38_flash_next_gpu_probe
-nix develop -c build/gpu-test/tests/models/qwen38_flash_next/qwen38_flash_next_gpu_probe \
-  --model "$MODEL" --mtp-model "$MTP" --batch 2048 --mtp-audit
+cargo test -p gufo-qwen38-flash-next --lib
+cargo test --profile gpu-test -p gufo-qwen38-flash-next --features gpu \
+  --test quality --test serving --test snapshot -- --ignored --nocapture
 ```
+
+The independent MTP audit against the CPU formulas
+(`qwen38_flash_next_gpu_probe --mtp-audit`), the deep AR/MTP execution check
+(`--execution-only 133120`), the scalar reference probe and the C++ operator
+checks of the kernels went with the C++ engine; an upstream checkout builds
+them with its CMake presets.
 
 The [vLLM](https://github.com/vllm-project/vllm/blob/751f6807d9cb3de50c27a5f27188c4fb04fe0e2b/vllm/models/qwen4_exp/amd/mtp.py)
 and [SGLang](https://github.com/sgl-project/sglang/blob/993d1fccbaafe3e79d91567d2fc1d665cc94fa50/python/sglang/srt/models/qwen4_exp_mtp.py)

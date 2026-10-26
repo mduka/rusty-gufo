@@ -26,7 +26,7 @@ class ImpactTest(unittest.TestCase):
             impact.validate(self.manifest, [*names, "new-suite"])
 
     def test_private_continuation_overrides_runtime_scope(self):
-        result = impact.plan(self.manifest, ["src/models/qwen38_flash_next/continuation_adapter.cpp"])
+        result = impact.plan(self.manifest, ["src/models/qwen38_flash_next/src/snapshot.rs"])
         self.assertEqual(result["paths"][0]["rules"], ["flash-next-continuation"])
         self.assertEqual({row["profile"] for row in result["selected"]},
                          {"flash-next-q4/off", "flash-next-q4/mtp"})
@@ -34,7 +34,7 @@ class ImpactTest(unittest.TestCase):
         self.assertLessEqual({"cache", "long-context", "cache-edits", "discovery", "state-edges"}, names)
 
     def test_shared_qwen_is_not_private_qwen27(self):
-        result = impact.plan(self.manifest, ["src/models/qwen/tokenizer.cpp"])
+        result = impact.plan(self.manifest, ["src/core/src/qwen_tokenizer.rs"])
         profiles = {row["profile"] for row in result["selected"]}
         self.assertIn("flash-next-q4/mtp", profiles)
         self.assertIn("qwen27-q8/dflash2", profiles)
@@ -42,14 +42,14 @@ class ImpactTest(unittest.TestCase):
         self.assertTrue(result["obligations"])
 
     def test_multiple_changes_preserve_independent_reasons(self):
-        result = impact.plan(self.manifest, ["src/models/qwen38_flash_next/engine.cpp",
-                                             "src/models/deepseek_v4_flash/model.cpp"])
+        result = impact.plan(self.manifest, ["src/models/qwen38_flash_next/src/engine/mod.rs",
+                                             "src/models/deepseek_v4_flash/src/engine.rs"])
         for row in result["selected"]:
             if row["profile"].startswith("flash-next"):
                 self.assertTrue(all("qwen38_flash_next" in reason["path"] for reason in row["reasons"]))
 
     def test_unknown_paths_expand_and_deferred_are_visible(self):
-        result = impact.plan(self.manifest, ["src/new_component.cpp"], ["flash-next-q4"])
+        result = impact.plan(self.manifest, ["src/new_component.rs"], ["flash-next-q4"])
         self.assertEqual(result["paths"][0]["rules"], ["fallback"])
         self.assertTrue(result["selected"])
         self.assertTrue(result["out_of_scope"])
@@ -90,7 +90,7 @@ class ImpactTest(unittest.TestCase):
             impact.plan(self.manifest, [], ["typo"])
 
     def test_profile_filter_keeps_one_mode(self):
-        paths = ["src/models/qwen38_flash_next/engine.cpp"]
+        paths = ["src/models/qwen38_flash_next/src/engine/mod.rs"]
         plan = impact.plan(self.manifest, paths, ["flash-next-q4/mtp"])
         self.assertTrue(plan["groups"])
         self.assertEqual({group["profile"] for group in plan["groups"]}, {"flash-next-q4/mtp"})
@@ -100,8 +100,8 @@ class ImpactTest(unittest.TestCase):
 
     def test_pr_tier_defers_release_suites_unless_escalated(self):
         mtp = ["flash-next-q4/mtp"]
-        full = impact.plan(self.manifest, ["src/cli/serve/openai_chat.cpp"], mtp)
-        pr = impact.plan(self.manifest, ["src/cli/serve/openai_chat.cpp"], mtp, "pr")
+        full = impact.plan(self.manifest, ["src/cli/serve/src/openai_chat/mod.rs"], mtp)
+        pr = impact.plan(self.manifest, ["src/cli/serve/src/openai_chat/mod.rs"], mtp, "pr")
         self.assertEqual((full["tier"], pr["tier"]), ("full", "pr"))
         self.assertFalse(full["release_only"])
         deferred = {row["suite"] for row in pr["release_only"]}
@@ -110,11 +110,11 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual({row["suite"] for row in full["selected"]},
                          deferred | {row["suite"] for row in pr["selected"]})
         # Cache code escalates the deep cache suites; model kernels escalate depth only.
-        cache = impact.plan(self.manifest, ["src/cache/ledger.cpp"], mtp, "pr")
+        cache = impact.plan(self.manifest, ["src/cli/serve/src/continuation_cache.rs"], mtp, "pr")
         self.assertNotIn("cache-stalls", {row["suite"] for row in cache["release_only"]})
         stalls = next(row for row in cache["selected"] if row["suite"] == "cache-stalls")
-        self.assertEqual(stalls["escalated_by"], ["src/cache/ledger.cpp"])
-        kernel = impact.plan(self.manifest, ["src/models/qwen38_flash_next/engine.cpp"], mtp, "pr")
+        self.assertEqual(stalls["escalated_by"], ["src/cli/serve/src/continuation_cache.rs"])
+        kernel = impact.plan(self.manifest, ["src/models/qwen38_flash_next/src/engine/mod.rs"], mtp, "pr")
         names = {row["suite"] for row in kernel["selected"]}
         self.assertIn("cache-depth", names)
         self.assertNotIn("cache-stalls", names)
@@ -129,7 +129,7 @@ class ImpactTest(unittest.TestCase):
             impact.validate(broken, impact.suite_names(HERE / "run.py"))
 
     def test_executor_passes_the_plan_tier(self):
-        plan = impact.plan(self.manifest, ["src/cli/serve/openai_chat.cpp"],
+        plan = impact.plan(self.manifest, ["src/cli/serve/src/openai_chat/mod.rs"],
                            ["flash-next-q4/mtp"], "pr")
         with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {}, clear=True):
             output = Path(directory) / "results"
@@ -143,7 +143,7 @@ class ImpactTest(unittest.TestCase):
         self.assertEqual(args[args.index("--tier") + 1], "pr")
 
     def test_executor_retains_failed_groups_and_runs_both_modes(self):
-        plan = impact.plan(self.manifest, ["src/models/qwen38_flash_next/engine.cpp"], ["flash-next-q4"])
+        plan = impact.plan(self.manifest, ["src/models/qwen38_flash_next/src/engine/mod.rs"], ["flash-next-q4"])
         with tempfile.TemporaryDirectory() as directory, patch.dict("os.environ", {}, clear=True):
             output = Path(directory) / "results"
             codes = [subprocess.CompletedProcess([], 1)] + [
@@ -162,7 +162,7 @@ class ImpactTest(unittest.TestCase):
                 self.assertIn("--record-baseline", args)
 
     def test_executor_reports_failure_detail_and_removes_disk_caches(self):
-        plan = impact.plan(self.manifest, ["src/models/qwen38_flash_next/engine.cpp"], ["flash-next-q4"])
+        plan = impact.plan(self.manifest, ["src/models/qwen38_flash_next/src/engine/mod.rs"], ["flash-next-q4"])
 
         def fake_run(args, stdout, stderr):
             group = Path(args[args.index("--output") + 1])

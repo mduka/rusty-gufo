@@ -8,8 +8,8 @@ Native BF16 safetensors text embeddings on gfx1151.  Gufo runs the text backbone
 nix develop -c hf download google/embeddinggemma-2 \
   --revision 914f7f89142e33e77833254d9c9b90c3cef7303b \
   --local-dir models/embeddinggemma-2
-nix build
-./result/bin/gufo serve embedding --model models/embeddinggemma-2
+cargo build --release -p gufo
+./target/release/gufo serve embedding --model models/embeddinggemma-2
 ```
 
 ```sh
@@ -46,4 +46,6 @@ Loading uploads the 540 MB text backbone, unmaps the checkpoint so the weights s
 
 Sequences from one request or from concurrent requests run one device batch at a time.  A batch packs up to 8,192 tokens, and a single request may span more than one batch.  Concurrent requests take turns in arrival order, one batch per turn, so a short request waits for at most one batch of a long one.  A device failure that a probe confirms answers 503 `device_lost` and shuts the server down for its supervisor to restart, as the text server does.  Attention is bidirectional, so there is no cache to reuse between requests.  Gufo checks for cancellation once the request reaches the device and between its device batches.  `--served-model-name` sets the public model ID.  Gufo supports only BF16 safetensors, not GGUF or quantized variants.
 
-See [server limits](../../SERVER.md) and [quality gaps](QUALITY.md).
+The engine is the Rust crate [`src/models/embedding_gemma2`](../../../src/models/embedding_gemma2) over the HIP kernels of its `kernels` crate; the service and the HTTP API live in `gufo-serve`.
+
+See [server limits](../../SERVER.md#embeddings) and [quality gaps](QUALITY.md).

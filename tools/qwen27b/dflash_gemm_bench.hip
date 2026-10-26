@@ -1,5 +1,5 @@
 // DFlash2 exact small-batch GEMM ablations, using the production templates.
-// Build inside Nix with tools/bench/build.sh and this source path.
+// Build with tools/bench/build.sh and this source path.
 // Run: /tmp/dflash_gemm_bench bf16|q8|q4|q5|iq4|q6|q3|iq4-nl M K [iterations]
 // [batch] Scalar Q8/Q4/Q5/IQ4/Q6 use batch=1; append swiglu [up-quant] for
 // gate/up. Defaults: 24 iterations, batch 7 for Q6 and 8 otherwise; widths 2–8

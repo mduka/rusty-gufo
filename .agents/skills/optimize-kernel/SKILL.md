@@ -13,9 +13,9 @@ changing dispatch. Follow the user's machine, time, and Git instructions.
 
 ## Fast experiment loop
 
-1. Keep baseline and candidate production binaries/objects. Use `nix build`, or the
-   `release` CMake preset with the same compiler/dependency versions. Test
-   binaries keep assertions and are for correctness, not headline timings.
+1. Keep baseline and candidate production binaries/objects. Use
+   `cargo build --release -p gufo` with the same compiler/dependency versions. Test
+   builds (`gpu-test`) keep assertions and are for correctness, not headline timings.
 2. Start with one affected shape and one control. Use pp2048/tg128 for retained
    end-to-end results; tiny prompts/outputs suffice to debug launches. For a
    depth issue, try d16K/d32K first. Expand to d64K/d128K only when justified.
@@ -26,6 +26,11 @@ changing dispatch. Follow the user's machine, time, and Git instructions.
    looked 18% busy overall but was 87% busy during inference.
    Warm each batch shape before calibration: large lazy allocations caused
    100 ms stalls here. Use a median complete cycle when timings remain noisy.
+   Kernel tracing perturbs submission: `rocprofv3 --kernel-trace` intercepts
+   every packet inside the launch, so a traced `hipGraphLaunch` took 7–8 ms
+   instead of ~11 µs and the GPU showed 0.3–1 ms gaps that an untraced run
+   does not have. Confirm a gap or host cost untraced (`wall_clock64()`
+   probes, host timers, or an A/B) before acting on it.
 4. Change one mechanism, compile the affected target, then run its existing
    analytic/operator check. Use `tools/bench/build.sh <name>` for standalone
    HIP experiments; each result needs correctness alongside throughput.
@@ -170,6 +175,20 @@ changing dispatch. Follow the user's machine, time, and Git instructions.
   Lossless weight packing can still be a poor trade: 2% TTS speed for over
   2 GiB extra copies was rejected. Non-temporal loads won cold microbenchmarks
   but lost complete TTS requests; always reproduce model cache traffic.
+- **Decode launch count and latency (Flash-Next F8, F9):** a kernel that
+  holds 32 consecutive values per wave can write the next GEMV's Q8_1 rows
+  itself; 376 fewer kernels per step gained ~1.4 to 2 µs each. Pass the
+  staging slot explicitly and check (address, rows, cols) before reuse;
+  clear it on every other write of those rows. Short-grid kernels (4 to 24
+  blocks per token) were latency-bound: issuing all loads first, keeping
+  values in registers and wide loads made three of them 2 to 3.7 times
+  faster with the same element mapping. Fast math bites both: a fused
+  quantizer must see the rounded value (an `asm volatile` barrier, or the
+  producer's multiply folds into the first sum), and an unrolled reduction
+  must spell out the old kernel's compiled order (the scalar small GEMM was
+  a folded FMA chain, not per-step dots): read its ISA first. Prove the
+  rewrite against the old kernel with a temporary reference launcher, or
+  keep the old one as a dual-path fallback with a permanent test.
 - **Graphs:** verify replay actually launches every new operation. Side-stream
   work during capture is not automatically included in the graph. Check the
   relevant shallow/deep dispatch boundaries and unprofiled wall time.
@@ -205,6 +224,6 @@ individual request decode rates; define the timed scope and retain request
 latencies in raw profiling artifacts. Time execution directly: an asynchronous
 snapshot outside the decode timer must not be subtracted again at completion.
 Raise the benchmark server's per-client queue limit for
-C8 from one host; a rejected request is not a throughput result. For H3,
-prefer an analytic case or one block/forward pass;
+C8 from one host; a rejected request is not a throughput result. For a
+video model, prefer an analytic case or one block/forward pass;
 do not generate full videos during routine kernel work.

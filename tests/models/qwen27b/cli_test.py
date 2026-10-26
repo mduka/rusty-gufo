@@ -246,24 +246,26 @@ def check_http(binary, model, draft, policies, selection="both"):
                     if request("/completion", {"prompt": prompt, **sampling})["content"] != text:
                         raise AssertionError("/completion sampling differs from completions")
                     chat = request("/v1/chat/completions", {"messages": messages, **sampling})
-                    # Qwen27B chat thinks by default, so compare every generated
-                    # token, reasoning included, across the adapters.
-                    message = chat["choices"][0]["message"]
-                    chat_text = message.get("reasoning_content", "") + message["content"]
+                    chat_text = chat["choices"][0]["message"]["content"]
+                    chat_reasoning = chat["choices"][0]["message"].get("reasoning_content", "")
+                    # The adapters split reasoning like chat completions: a
+                    # thinking block and a reasoning item before the answer.
                     anthropic = request("/v1/messages", {"messages": messages, **sampling})
+                    blocks = {block["type"]: block for block in anthropic["content"]}
                     responses = request("/v1/responses", {"input": prompt, **sampling})
-                    anthropic_text = "".join(block.get("thinking", block.get("text", ""))
-                                             for block in anthropic["content"])
-                    responses_text = "".join(
-                        part["text"] for item in responses["output"]
-                        for part in item.get("summary", item.get("content", [])))
-                    if anthropic_text != chat_text or responses_text != chat_text:
-                        raise AssertionError("chat API adapters use different sampling")
+                    # Reasoning is upstream's summary part by default.
+                    items = {item["type"]: (item["summary"] if item["type"] == "reasoning"
+                                            else item["content"])[0]
+                             for item in responses["output"]}
+                    if ((blocks.get("thinking", {}).get("thinking", ""),
+                         blocks.get("text", {}).get("text", "")) != (chat_reasoning, chat_text) or
+                            (items.get("reasoning", {}).get("text", ""),
+                             items.get("message", {}).get("text", "")) != (chat_reasoning, chat_text)):
+                        raise AssertionError("chat API adapters differ from chat completions")
                 streamed = request("/v1/chat/completions", {
                     "messages": messages, **sampling, "stream": True,
                     "stream_options": {"include_usage": True}})
-                streamed_text = "".join(choice.get("delta", {}).get("reasoning_content", "") +
-                                        choice.get("delta", {}).get("content", "")
+                streamed_text = "".join(choice.get("delta", {}).get("content", "")
                                         for chunk in streamed for choice in chunk.get("choices", []))
                 if streamed_text != chat_text:
                     raise AssertionError("streaming changed sampled output")
@@ -297,7 +299,7 @@ def check_http(binary, model, draft, policies, selection="both"):
                             ("xtc_probability", 0.5), ("dry_multiplier", 0.8),
                             ("top_n_sigma", 2), ("logit_bias", {"42": 1})):
                         request(path, {**payload, field: value}, expected=400)
-                # Suffix-conditioned infill is not implemented (docs/SERVER.md).
+                # Fill-in-the-middle is not implemented for text models.
                 request("/infill", {"input_prefix": prompt}, expected=501)
                 print(f"{policy}: {len(SAMPLING_CASES)} sampling configurations, "
                       "serve defaults, five HTTP adapters, replay, SSE and C2 exact")

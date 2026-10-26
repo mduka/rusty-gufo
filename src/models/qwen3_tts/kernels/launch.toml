@@ -1,0 +1,787 @@
+# Kernel contract for the Qwen3-TTS kernels (docs/RUST.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last unless
+# a `stream` parameter places it. Trusted base: a wrong extent compiles and
+# lets a kernel overrun its buffer. Review changes like unsafe code; every
+# launcher needs probes (tests/extents.rs).
+
+[library]
+name = "qwen3_tts"
+root = "../../../.."
+namespace = "gufo::models::qwen3_tts::hip"
+headers = [
+  "src/models/qwen3_tts/hip/talker_ops.hpp",
+  "src/models/qwen3_tts/hip/speech_decoder_ops.hpp",
+  "src/models/qwen3_tts/hip/encoder_ops.hpp",
+  "src/models/qwen3_tts/kernels/adapters.hpp",
+]
+
+[[source]]
+path = "src/models/qwen3_tts/hip/talker_ops.hip"
+
+[[source]]
+path = "src/models/qwen3_tts/hip/speech_decoder_ops.hip"
+
+[[source]]
+path = "src/models/qwen3_tts/hip/encoder_ops.hip"
+
+[[source]]
+path = "src/models/qwen3_tts/kernels/adapters.hip"
+
+# --- Talker and code predictor -----------------------------------------------
+
+[[launcher]]
+name = "bf16_attention"
+cpp = "LaunchBfloat16Attention"
+returns = "void"
+doc = "Causal attention over the f32 cache `[layer][kv_head][capacity][head_dim]` with BF16 scores, probabilities and output; writes this step's K/V unless `cache_written`."
+params = [
+  { name = "query", kind = "in", elem = "f32", len = "tokens * heads * head_dim" },
+  { name = "key", kind = "in", elem = "f32", len = "tokens * kv_heads * head_dim" },
+  { name = "value", kind = "in", elem = "f32", len = "tokens * kv_heads * head_dim" },
+  { name = "key_cache", kind = "inout", elem = "f32", len = "(layer + 1) * kv_heads * capacity * head_dim" },
+  { name = "value_cache", kind = "inout", elem = "f32", len = "(layer + 1) * kv_heads * capacity * head_dim" },
+  { name = "output", kind = "out", elem = "bf16", len = "tokens * heads * head_dim" },
+  { name = "layer", kind = "scalar", type = "usize" },
+  { name = "position", kind = "scalar", type = "usize" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "capacity", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "stream", kind = "stream" },
+  { name = "cache_written", kind = "scalar", type = "bool" },
+]
+requires = ["position + tokens <= capacity"]
+probes = [
+  { layer = 1, position = 3, tokens = 2, capacity = 8, heads = 16, kv_heads = 8, head_dim = 128, cache_written = false },
+  { layer = 0, position = 0, tokens = 70, capacity = 70, heads = 4, kv_heads = 2, head_dim = 64, cache_written = true },
+]
+
+[[launcher]]
+name = "bf16_per_head_rms_norm"
+cpp = "LaunchBfloat16PerHeadRMSNorm"
+returns = "void"
+doc = "BF16 RMSNorm of every head in place (the separate q/k path when the fused kernel declines)."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "head_dim", optional = true },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 3, num_heads = 16, head_dim = 128, epsilon = 1e-6, with = ["weight"] },
+  { batch_size = 1, num_heads = 2, head_dim = 200, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "bf16_rope_and_round_v"
+cpp = "LaunchBfloat16RoPEAndRoundV"
+returns = "void"
+doc = "BF16 rotation of q and k and BF16 rounding of v, in place."
+params = [
+  { name = "query", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "key", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "value", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "start_position", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 2, num_heads = 16, num_key_value_heads = 8, head_dim = 128, start_position = 5, rope_theta = 1e6 },
+  { batch_size = 1, num_heads = 4, num_key_value_heads = 1, head_dim = 200, start_position = 0, rope_theta = 1e4 },
+]
+
+[[launcher]]
+name = "bf16_qk_norm_rope"
+cpp = "LaunchBfloat16QkNormRoPE"
+returns = "supported"
+doc = "Fused q/k BF16 RMSNorm and RoPE and v rounding; with a cache also stores K/V at `start_position` of layer `layer_index` (`[layer][kv_head][max_context][head_dim]`). Declines heads wider than one workgroup and a cache window overrun."
+params = [
+  { name = "query", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "key", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "value", kind = "inout", elem = "f32", len = "batch_size * num_key_value_heads * head_dim" },
+  { name = "query_weight", kind = "in", elem = "f32", len = "head_dim", optional = true },
+  { name = "key_weight", kind = "in", elem = "f32", len = "head_dim", optional = true },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "start_position", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+  { name = "key_cache", kind = "inout", elem = "f32", optional = true, len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "value_cache", kind = "inout", elem = "f32", optional = true, len = "(layer_index + 1) * num_key_value_heads * max_context * head_dim" },
+  { name = "layer_index", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+]
+probes = [
+  { batch_size = 2, num_heads = 16, num_key_value_heads = 8, head_dim = 128, start_position = 3, rope_theta = 1e6, epsilon = 1e-6, layer_index = 2, max_context = 6, with = ["query_weight", "key_weight", "key_cache", "value_cache"] },
+  { batch_size = 1, num_heads = 4, num_key_value_heads = 2, head_dim = 64, start_position = 0, rope_theta = 1e6, epsilon = 1e-6, layer_index = 0, max_context = 1 },
+]
+
+[[launcher]]
+name = "bf16_residual_add_rms_norm"
+cpp = "LaunchBfloat16ResidualAddRMSNorm"
+returns = "void"
+doc = "Optionally adds the BF16-rounded `update` into `hidden`, then writes the BF16 RMSNorm (normalization rounded before the weight)."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "batch_size * dimension" },
+  { name = "update", kind = "in", elem = "f32", len = "batch_size * dimension", optional = true },
+  { name = "weight", kind = "in", elem = "f32", len = "dimension", optional = true },
+  { name = "output", kind = "out", elem = "bf16", len = "batch_size * dimension" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dimension", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 3, dimension = 2048, epsilon = 1e-6, with = ["update", "weight"] },
+  { batch_size = 1, dimension = 300, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "round_bf16_in_place"
+cpp = "LaunchRoundBfloat16InPlace"
+returns = "void"
+doc = "Rounds every value to BF16 in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 3072 }, { count = 1 }]
+
+[[launcher]]
+name = "bf16_to_f32"
+cpp = "LaunchBfloat16ToFloat"
+returns = "void"
+doc = "Widens BF16 values to f32."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "count" },
+  { name = "output", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 2048 }, { count = 257 }]
+
+[[launcher]]
+name = "bf16_swiglu"
+cpp = "LaunchBfloat16SwiGlu"
+returns = "void"
+doc = "BF16 SiLU(gate) times up, written as f32 and/or BF16."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "count" },
+  { name = "up", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "f32", len = "count", optional = true },
+  { name = "output_bfloat16", kind = "out", elem = "bf16", len = "count", optional = true },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 6144, with = ["output_bfloat16"] },
+  { count = 257, with = ["output", "output_bfloat16"] },
+]
+
+[[launcher]]
+name = "bf16_bias_silu"
+cpp = "LaunchBfloat16BiasSilu"
+returns = "void"
+doc = "BF16 SiLU of `input` plus a BF16 bias per column, written as f32 and/or BF16."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * columns", optional = true },
+  { name = "output_bfloat16", kind = "out", elem = "bf16", len = "rows * columns", optional = true },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, columns = 2048, with = ["output", "output_bfloat16"] },
+  { rows = 1, columns = 7 },
+]
+
+[[launcher]]
+name = "bf16_bias"
+cpp = "LaunchBfloat16Bias"
+returns = "void"
+doc = "BF16 sum of `input` and a BF16 bias per column."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 3, columns = 2048 }, { rows = 1, columns = 5 }]
+
+[[launcher]]
+name = "bf16_bias_in_place"
+cpp = "LaunchBfloat16Bias"
+returns = "void"
+doc = "`bf16_bias` with `values` as input and output."
+params = [
+  { name = "input", kind = "alias", of = "values", elem = "f32", read_only = true },
+  { name = "bias", kind = "in", elem = "bf16", len = "columns" },
+  { name = "values", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 2, columns = 1024 }, { rows = 1, columns = 3 }]
+
+[[launcher]]
+name = "codec_embedding_sum"
+cpp = "LaunchBatchedCodecEmbeddingSumList"
+returns = "void"
+doc = "BF16 sum of the codec embeddings of every `[frame][group]` code (group `g` reads table `g`), plus an optional text row; the table pointers go through `device_tables`."
+params = [
+  { name = "tables", kind = "in", elem = "bf16", list = "groups", len = "rows * hidden_size" },
+  { name = "device_tables", kind = "out", elem = "bytes", len = "groups * 8" },
+  { name = "codes", kind = "indices", len = "frames * groups", below = "rows" },
+  { name = "text_embedding", kind = "in", elem = "f32", len = "hidden_size", optional = true },
+  { name = "output", kind = "out", elem = "f32", len = "frames * hidden_size" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { frames = 1, groups = 16, hidden_size = 2048, rows = 5, with = ["text_embedding"] },
+  { frames = 3, groups = 2, hidden_size = 7, rows = 1 },
+]
+
+[[launcher]]
+name = "bf16_gemv"
+cpp = "LaunchBfloat16Gemv"
+returns = "supported"
+doc = "`output[b * rows + m] = sum_k weights[m * columns + k] * inputs[b * columns + k]` with a fixed f32 reduction; declines batches above 4 and weights or inputs without 8-byte alignment."
+params = [
+  { name = "weights", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "inputs", kind = "in", elem = "bf16", len = "batch * columns" },
+  { name = "output", kind = "out", elem = "f32", len = "batch * rows" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch = 1, rows = 3072, columns = 2048 },
+  { batch = 4, rows = 3, columns = 8 },
+]
+
+[[launcher]]
+name = "bf16_gemv_grouped"
+cpp = "LaunchBfloat16GemvGroupedFlat"
+returns = "supported"
+doc = "`bf16_gemv` of two or three projections sharing `inputs` in one launch (bit-identical to separate launches); the third group is absent when `weights2` is."
+params = [
+  { name = "weights0", kind = "in", elem = "bf16", len = "rows0 * columns" },
+  { name = "output0", kind = "out", elem = "f32", len = "batch * rows0" },
+  { name = "rows0", kind = "scalar", type = "usize" },
+  { name = "weights1", kind = "in", elem = "bf16", len = "rows1 * columns" },
+  { name = "output1", kind = "out", elem = "f32", len = "batch * rows1" },
+  { name = "rows1", kind = "scalar", type = "usize" },
+  { name = "weights2", kind = "in", elem = "bf16", len = "rows2 * columns", optional = true },
+  { name = "output2", kind = "out", elem = "f32", len = "batch * rows2", optional = true },
+  { name = "rows2", kind = "scalar", type = "usize" },
+  { name = "inputs", kind = "in", elem = "bf16", len = "batch * columns" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows0 = 2048, rows1 = 1024, rows2 = 1024, batch = 1, columns = 2048, with = ["weights2", "output2"] },
+  { rows0 = 3, rows1 = 5, rows2 = 0, batch = 4, columns = 8 },
+]
+
+# --- Speech-tokenizer decoder (f32) -------------------------------------------
+
+[[launcher]]
+name = "decode_codebook"
+cpp = "LaunchDecodeCodebook"
+returns = "void"
+doc = "Writes (or, unless `initialize`, adds) codebook rows `embedding_sum[code] / max(cluster_usage[code], 1e-5)` of one group of `[frame][group]` codes."
+params = [
+  { name = "codes", kind = "indices", len = "frames * code_groups", below = "codebook_size" },
+  { name = "code_groups", kind = "scalar", type = "u32" },
+  { name = "group_index", kind = "scalar", type = "u32" },
+  { name = "embedding_sum", kind = "in", elem = "f32", len = "codebook_size * dimension" },
+  { name = "cluster_usage", kind = "in", elem = "f32", len = "codebook_size" },
+  { name = "output", kind = "inout", elem = "f32", len = "frames * dimension" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "dimension", kind = "scalar", type = "usize" },
+  { name = "initialize", kind = "scalar", type = "bool" },
+  { name = "codebook_size", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["group_index < code_groups"]
+probes = [
+  { code_groups = 16, group_index = 15, frames = 3, dimension = 256, initialize = false, codebook_size = 4 },
+  { code_groups = 1, group_index = 0, frames = 1, dimension = 5, initialize = true, codebook_size = 1 },
+]
+
+[[launcher]]
+name = "add"
+cpp = "LaunchAdd"
+returns = "void"
+doc = "`output = left + right`."
+params = [
+  { name = "left", kind = "in", elem = "f32", len = "elements" },
+  { name = "right", kind = "in", elem = "f32", len = "elements" },
+  { name = "output", kind = "out", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 3 }]
+
+[[launcher]]
+name = "add_in_place"
+cpp = "LaunchAdd"
+returns = "void"
+doc = "`values += right`."
+params = [
+  { name = "left", kind = "alias", of = "values", elem = "f32", read_only = true },
+  { name = "right", kind = "in", elem = "f32", len = "elements" },
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 3 }]
+
+[[launcher]]
+name = "add_bias"
+cpp = "LaunchAddBias"
+returns = "void"
+doc = "Adds a bias per column in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "f32", len = "columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 3, columns = 1024 }, { rows = 1, columns = 1 }]
+
+[[launcher]]
+name = "add_scaled_channels"
+cpp = "LaunchAddScaledChannels"
+returns = "void"
+doc = "`residual = fma(update, scale[column], residual)`."
+params = [
+  { name = "residual", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "update", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "scale", kind = "in", elem = "f32", len = "columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 3, columns = 512 }, { rows = 1, columns = 7 }]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "LaunchRmsNorm"
+returns = "void"
+doc = "f32 RMSNorm of every row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "weight", kind = "in", elem = "f32", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [{ rows = 3, columns = 512, epsilon = 1e-5 }, { rows = 1, columns = 1, epsilon = 1e-5 }]
+
+[[launcher]]
+name = "layer_norm"
+cpp = "LaunchLayerNorm"
+returns = "void"
+doc = "f32 LayerNorm of every row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "weight", kind = "in", elem = "f32", len = "columns" },
+  { name = "bias", kind = "in", elem = "f32", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [{ rows = 3, columns = 1024, epsilon = 1e-6 }, { rows = 1, columns = 3, epsilon = 1e-6 }]
+
+[[launcher]]
+name = "rope"
+cpp = "LaunchRope"
+returns = "void"
+doc = "f32 RoPE of q and k `[frame][head][head_dimension]` in place, from position `start_position`."
+params = [
+  { name = "query", kind = "inout", elem = "f32", len = "frames * heads * head_dimension" },
+  { name = "key", kind = "inout", elem = "f32", len = "frames * heads * head_dimension" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dimension", kind = "scalar", type = "usize" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "start_position", kind = "scalar", type = "usize" },
+]
+probes = [
+  { frames = 3, heads = 16, head_dimension = 64, rope_theta = 1e4, start_position = 7 },
+  { frames = 1, heads = 1, head_dimension = 3, rope_theta = 1e4, start_position = 0 },
+]
+
+[[launcher]]
+name = "sliding_causal_attention"
+cpp = "LaunchSlidingCausalAttention"
+returns = "void"
+doc = "f32 sliding-window causal attention of `frames` queries at `query_offset` over `key_frames` keys `[frame][head][head_dimension]`."
+params = [
+  { name = "query", kind = "in", elem = "f32", len = "frames * heads * head_dimension" },
+  { name = "key", kind = "in", elem = "f32", len = "key_frames * heads * head_dimension" },
+  { name = "value", kind = "in", elem = "f32", len = "key_frames * heads * head_dimension" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * heads * head_dimension" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dimension", kind = "scalar", type = "usize" },
+  { name = "sliding_window", kind = "scalar", type = "usize" },
+  { name = "stream", kind = "stream" },
+  { name = "query_offset", kind = "scalar", type = "usize" },
+  { name = "key_frames", kind = "scalar", type = "usize" },
+]
+requires = ["key_frames >= 1", "query_offset + frames <= key_frames"]
+probes = [
+  { frames = 2, heads = 16, head_dimension = 64, sliding_window = 72, query_offset = 5, key_frames = 7 },
+  { frames = 3, heads = 1, head_dimension = 5, sliding_window = 2, query_offset = 0, key_frames = 3 },
+]
+
+[[launcher]]
+name = "swiglu"
+cpp = "LaunchSwiGlu"
+returns = "void"
+doc = "f32 SiLU(gate) times up."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "elements" },
+  { name = "up", kind = "in", elem = "f32", len = "elements" },
+  { name = "output", kind = "out", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 1024 }, { elements = 3 }]
+
+[[launcher]]
+name = "gelu"
+cpp = "LaunchGelu"
+returns = "void"
+doc = "Exact (erf) GELU in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 1 }]
+
+[[launcher]]
+name = "snake_beta"
+cpp = "LaunchSnakeBeta"
+returns = "void"
+doc = "SnakeBeta with per-channel log-scale alpha and beta."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "alpha", kind = "in", elem = "f32", len = "columns" },
+  { name = "beta", kind = "in", elem = "f32", len = "columns" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 4, columns = 1536 }, { rows = 1, columns = 1 }]
+
+[[launcher]]
+name = "causal_conv1d_im2col"
+cpp = "LaunchCausalConv1dIm2Col"
+returns = "void"
+doc = "Causal im2col: `columns[t][c][tap]` from `input[t - (kernel - 1) * dilation + tap * dilation][c]`, zero before the start."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "input_length * input_channels" },
+  { name = "columns", kind = "out", elem = "f32", len = "output_length * input_channels * kernel" },
+  { name = "input_length", kind = "scalar", type = "usize" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+  { name = "output_length", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "dilation", kind = "scalar", type = "usize" },
+]
+probes = [
+  { input_length = 5, input_channels = 96, output_length = 5, kernel = 7, dilation = 9 },
+  { input_length = 1, input_channels = 1, output_length = 3, kernel = 1, dilation = 1 },
+]
+
+[[launcher]]
+name = "causal_depthwise_conv1d"
+cpp = "LaunchCausalDepthwiseConv1d"
+returns = "void"
+doc = "Causal depthwise convolution `[time][channel]` with weights `[channel][kernel]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "length * channels" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels", optional = true },
+  { name = "output", kind = "out", elem = "f32", len = "length * channels" },
+  { name = "length", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "dilation", kind = "scalar", type = "usize" },
+]
+probes = [
+  { length = 6, channels = 1024, kernel = 7, dilation = 1, with = ["bias"] },
+  { length = 1, channels = 3, kernel = 2, dilation = 4 },
+]
+
+[[launcher]]
+name = "transpose_conv_weight"
+cpp = "LaunchTransposeConvWeight"
+returns = "void"
+doc = "Reorders transposed-convolution weights `[in][out][kernel]` to `[out][kernel][in]`."
+params = [
+  { name = "source", kind = "in", elem = "f32", len = "input_channels * output_channels * kernel" },
+  { name = "target", kind = "out", elem = "f32", len = "input_channels * output_channels * kernel" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+  { name = "output_channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+probes = [
+  { input_channels = 64, output_channels = 32, kernel = 16 },
+  { input_channels = 1, output_channels = 1, kernel = 1 },
+]
+
+[[launcher]]
+name = "assemble_causal_conv_transpose1d"
+cpp = "LaunchAssembleCausalConvTranspose1d"
+returns = "void"
+doc = "Sums the expanded `[input_time][out][kernel]` products into the causal transposed-convolution output `[time][out]`."
+params = [
+  { name = "expanded", kind = "in", elem = "f32", len = "input_length * output_channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "output_channels", optional = true },
+  { name = "output", kind = "out", elem = "f32", len = "output_length * output_channels" },
+  { name = "input_length", kind = "scalar", type = "usize" },
+  { name = "output_length", kind = "scalar", type = "usize" },
+  { name = "output_channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "stride", kind = "scalar", type = "usize" },
+]
+requires = ["stride >= 1"]
+probes = [
+  { input_length = 3, output_length = 24, output_channels = 768, kernel = 16, stride = 8, with = ["bias"] },
+  { input_length = 1, output_length = 5, output_channels = 2, kernel = 2, stride = 1 },
+]
+
+[[launcher]]
+name = "clamp"
+cpp = "LaunchClamp"
+returns = "void"
+doc = "Clamps every value to `[minimum, maximum]` in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+  { name = "minimum", kind = "scalar", type = "f32" },
+  { name = "maximum", kind = "scalar", type = "f32" },
+]
+probes = [{ elements = 1920, minimum = -1.0, maximum = 1.0 }, { elements = 1, minimum = 0.0, maximum = 0.0 }]
+
+# --- Base speech and speaker encoders -----------------------------------------
+
+[[launcher]]
+name = "encoder_conv1d_im2col"
+cpp = "LaunchEncoderConv1dIm2ColFlat"
+returns = "void"
+doc = "Strided, dilated im2col with `left_padding` and zero (0), replicate (1) or reflect (2) padding."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "input_length * input_channels" },
+  { name = "columns", kind = "out", elem = "f32", len = "output_length * input_channels * kernel" },
+  { name = "input_length", kind = "scalar", type = "usize" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+  { name = "output_length", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "dilation", kind = "scalar", type = "usize" },
+  { name = "left_padding", kind = "scalar", type = "usize" },
+  { name = "padding_mode", kind = "scalar", type = "u32" },
+]
+requires = ["input_length >= 1"]
+probes = [
+  { input_length = 9, input_channels = 64, output_length = 3, kernel = 8, stride = 4, dilation = 1, left_padding = 4, padding_mode = 1 },
+  { input_length = 2, input_channels = 3, output_length = 5, kernel = 5, stride = 1, dilation = 3, left_padding = 6, padding_mode = 2 },
+  { input_length = 1, input_channels = 1, output_length = 2, kernel = 3, stride = 1, dilation = 1, left_padding = 2, padding_mode = 0 },
+]
+
+[[launcher]]
+name = "elu"
+cpp = "LaunchElu"
+returns = "void"
+doc = "ELU (alpha 1) in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 1 }]
+
+[[launcher]]
+name = "relu"
+cpp = "LaunchRelu"
+returns = "void"
+doc = "ReLU in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 1 }]
+
+[[launcher]]
+name = "tanh"
+cpp = "LaunchTanh"
+returns = "void"
+doc = "tanh in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 1 }]
+
+[[launcher]]
+name = "round_bf16"
+cpp = "LaunchRoundBfloat16"
+returns = "void"
+doc = "Rounds every value to BF16 in place (encoder copy of the kernel)."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 4096 }, { elements = 1 }]
+
+[[launcher]]
+name = "extract_channels"
+cpp = "LaunchExtractChannels"
+returns = "void"
+doc = "Copies channels `[channel_offset, channel_offset + output_channels)` of every row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * input_channels" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * output_channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+  { name = "channel_offset", kind = "scalar", type = "usize" },
+  { name = "output_channels", kind = "scalar", type = "usize" },
+]
+requires = ["channel_offset + output_channels <= input_channels"]
+probes = [
+  { rows = 5, input_channels = 512, channel_offset = 448, output_channels = 64 },
+  { rows = 1, input_channels = 1, channel_offset = 0, output_channels = 1 },
+]
+
+[[launcher]]
+name = "insert_channels"
+cpp = "LaunchInsertChannels"
+returns = "void"
+doc = "Writes `input` into channels `[channel_offset, channel_offset + input_channels)` of every output row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * input_channels" },
+  { name = "output", kind = "inout", elem = "f32", len = "rows * output_channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "output_channels", kind = "scalar", type = "usize" },
+  { name = "channel_offset", kind = "scalar", type = "usize" },
+  { name = "input_channels", kind = "scalar", type = "usize" },
+]
+requires = ["channel_offset + input_channels <= output_channels"]
+probes = [
+  { rows = 5, output_channels = 512, channel_offset = 448, input_channels = 64 },
+  { rows = 1, output_channels = 1, channel_offset = 0, input_channels = 1 },
+]
+
+[[launcher]]
+name = "channel_mean"
+cpp = "LaunchChannelMean"
+returns = "void"
+doc = "Mean of every channel over the rows."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 300, channels = 512 }, { rows = 1, channels = 1 }]
+
+[[launcher]]
+name = "sigmoid_multiply_channels"
+cpp = "LaunchSigmoidMultiplyChannels"
+returns = "void"
+doc = "Scales every value by the sigmoid of its channel's `scale`, in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "rows * channels" },
+  { name = "scale", kind = "in", elem = "f32", len = "channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 3, channels = 512 }, { rows = 1, channels = 1 }]
+
+[[launcher]]
+name = "concatenate_three"
+cpp = "LaunchConcatenateThree"
+returns = "void"
+doc = "Concatenates three `[row][channel]` tensors along the channels."
+params = [
+  { name = "first", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "second", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "third", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * channels * 3" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 3, channels = 512 }, { rows = 1, channels = 1 }]
+
+[[launcher]]
+name = "attentive_stats_input"
+cpp = "LaunchAttentiveStatsInput"
+returns = "void"
+doc = "Rows `[value, channel mean, channel standard deviation]` for attentive statistics pooling."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * channels * 3" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [{ rows = 300, channels = 1536, epsilon = 1e-12 }, { rows = 1, channels = 1, epsilon = 1e-12 }]
+
+[[launcher]]
+name = "softmax_over_rows"
+cpp = "LaunchSoftmaxOverRows"
+returns = "void"
+doc = "Softmax of every channel over the rows, in place."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "rows * channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 300, channels = 1536 }, { rows = 1, channels = 1 }]
+
+[[launcher]]
+name = "weighted_stats"
+cpp = "LaunchWeightedStats"
+returns = "void"
+doc = "Weighted mean and standard deviation of every channel: `output[0..channels]` and `output[channels..]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "2 * channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [{ rows = 300, channels = 1536, epsilon = 1e-12 }, { rows = 1, channels = 1, epsilon = 1e-12 }]
+
+[[launcher]]
+name = "quantize_codebook"
+cpp = "LaunchQuantizeCodebook"
+returns = "void"
+doc = "Nearest codebook entry (embedding `[dimension][codebook_size]`) of every residual row into `codes[frame][group_index]`; optionally subtracts it from the residual (BF16)."
+params = [
+  { name = "residual", kind = "inout", elem = "f32", len = "frames * dimension" },
+  { name = "embedding", kind = "in", elem = "f32", len = "dimension * codebook_size" },
+  { name = "codes", kind = "out", elem = "u32", len = "frames * code_groups" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "dimension", kind = "scalar", type = "usize" },
+  { name = "codebook_size", kind = "scalar", type = "usize" },
+  { name = "code_groups", kind = "scalar", type = "usize" },
+  { name = "group_index", kind = "scalar", type = "usize" },
+  { name = "update_residual", kind = "scalar", type = "bool" },
+]
+requires = ["codebook_size >= 1", "group_index < code_groups"]
+probes = [
+  { frames = 3, dimension = 256, codebook_size = 2048, code_groups = 16, group_index = 15, update_residual = true },
+  { frames = 1, dimension = 1, codebook_size = 1, code_groups = 1, group_index = 0, update_residual = false },
+]

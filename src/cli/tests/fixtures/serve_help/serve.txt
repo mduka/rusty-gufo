@@ -1,0 +1,30 @@
+Usage: gufo serve [SERVER_OPTIONS] [COMMAND] [OPTIONS]
+
+Start the OpenAI-compatible HTTP server for a specific model modality.
+
+Commands:
+  llm       Serve text LLM endpoints (/v1/chat/completions, /v1/completions) [default]
+  image     Serve Qwen-Image-2.1 (/v1/images/generations, /v1/images/edits)
+  tts       Serve Qwen3-TTS speech synthesis (/v1/audio/speech)
+  asr       Serve Qwen3-ASR transcription (/v1/audio/transcriptions)
+  embedding Serve EmbeddingGemma 2 text embeddings (/v1/embeddings)
+
+Server:
+  -i, --host <IP>        Bind address (default: 127.0.0.1)
+  -p, --port <N>         Port to listen on (default: 8080)
+  -j, --sessions <N>     Preallocated GPU request sessions (default: 1)
+      --max-connections <N>
+                         Maximum simultaneous HTTP connections (default: 16)
+      --max-request-bytes <N>
+                         Maximum HTTP request body bytes (default: 8388608)
+      --api-key <KEY>    Require Bearer authorization for requests
+      --sse-ping-interval <N>
+                         Seconds a stream may stay silent before a ping (-1 disables) (default: 15)
+
+Logging:
+      --log-level <LEVEL>
+                         Log verbosity: error, warn, info or debug (default: info)
+  -v, --verbose          Shorthand for --log-level=debug
+
+General:
+  -h, --help             Print help

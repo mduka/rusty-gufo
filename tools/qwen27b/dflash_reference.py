@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Trace Gufo against pinned, unmodified upstream PyTorch DFlash2 operators.
 
-Consume --trace output from qwen_dflash_gpu_test. Weights come from the same
-GGUF artifact: this checks execution and binding, not the GGUF converter or
+Consume the --trace output of qwen_dflash_gpu_test
+(tests/models/qwen27b/dflash_test.cpp), a C++ test of an upstream v0.23.0
+checkout; no Rust test writes this trace. The Rust DFlash2 path matches the C++
+engine step by step (src/models/qwen35/tests/dflash.rs). Weights come from the
+same GGUF artifact: this checks execution and binding, not the GGUF converter or
 equivalence to an unquantized target checkpoint. No model download is implicit.
 """
 from __future__ import annotations

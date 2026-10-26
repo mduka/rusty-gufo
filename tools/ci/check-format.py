@@ -12,7 +12,6 @@ def main() -> int:
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     excluded = (
-        "src/models/deepseek_v4_flash/runtime/",
         "src/models/deepseek_v4_flash/kernels/rocm/",
         "src/models/qwen38_flash_next/kernels/rocm/mmq/",
     )

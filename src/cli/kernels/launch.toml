@@ -1,0 +1,49 @@
+# Kernel contract for the gufo diagnostics (docs/RUST.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes (tests/extents.rs).
+
+[library]
+name = "cli"
+root = "../../.."
+namespace = "gufo::cli::diagnostics::hip"
+headers = ["src/cli/kernels/hip/allocation.hpp"]
+
+[[source]]
+path = "src/cli/kernels/hip/allocation.hip"
+
+[[launcher]]
+name = "fill_pattern"
+cpp = "LaunchFillPattern"
+returns = "void"
+doc = "Writes `(index + seed) mod 256` to every byte of `data`, grid-stride over `blocks` blocks of 256 threads."
+params = [
+  { name = "data", kind = "out", elem = "u8", len = "size" },
+  { name = "size", kind = "scalar", type = "usize" },
+  { name = "seed", kind = "scalar", type = "u32" },
+  { name = "blocks", kind = "scalar", type = "u32" },
+]
+requires = ["blocks >= 1"]
+probes = [
+  { size = 1048576, seed = 37, blocks = 160 },
+  { size = 1, seed = 37, blocks = 1 },
+  { size = 1000, seed = 255, blocks = 7 },
+]
+
+[[launcher]]
+name = "checksum"
+cpp = "LaunchChecksum"
+returns = "void"
+doc = "Adds every byte of `data` into `sum[0]`, grid-stride over `blocks` blocks of 256 threads; the caller clears `sum` first."
+params = [
+  { name = "data", kind = "in", elem = "u8", len = "size" },
+  { name = "sum", kind = "inout", elem = "u64", len = "1" },
+  { name = "size", kind = "scalar", type = "usize" },
+  { name = "blocks", kind = "scalar", type = "u32" },
+]
+requires = ["blocks >= 1"]
+probes = [
+  { size = 1048576, blocks = 160 },
+  { size = 1, blocks = 1 },
+  { size = 1000, blocks = 7 },
+]

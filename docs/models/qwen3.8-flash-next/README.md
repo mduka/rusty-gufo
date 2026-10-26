@@ -5,7 +5,7 @@ Supported target: `unsloth/Qwen3.8-Flash-Next-GGUF`, **UD-Q4_K_XL** (four shards
 Optional shared-Q8 MTP predictor; optional BF16 vision projector.
 Original unquantized-model and GGUF-conversion parity remain unqualified.
 
-[Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md) · [ROCm 10.1 status](ROCM.md)
+[Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) · [Experiments](EXPERIMENTS.md) · [ROCm 10.1 status](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/models/qwen3.8-flash-next/ROCM.md)
 
 ## Load and run
 
@@ -14,11 +14,11 @@ nix develop -c hf download unsloth/Qwen3.8-Flash-Next-GGUF \
   --revision 38bb39ee97821de2c9009abb7e93950eec396e66 \
   --include "UD-Q4_K_XL/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf" "mmproj-BF16.gguf" \
   --local-dir models/qwen3.8-flash-next
-nix build
+cargo build --release -p gufo
 MODEL=/path/to/first-target-shard.gguf
 MTP=/path/to/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf
-./result/bin/gufo chat --model "$MODEL"
-./result/bin/gufo serve llm --model "$MODEL" --speculative mtp \
+./target/release/gufo chat --model "$MODEL"
+./target/release/gufo serve llm --model "$MODEL" --speculative mtp \
   --mtp-model "$MTP" --sessions 2 --context 32768
 ```
 
@@ -87,9 +87,9 @@ The official template defaults to thinking on, `xhigh` effort and preserving
 prior reasoning. Use the [reasoning controls](../../SERVER.md#reasoning-controls)
 for explicit effort/thinking overrides. Native context is 262144. A larger
 context needs static YaRN and `--enable-yarn`: `gufo serve llm` refuses to
-start with `--context` above 262144 without it, and `gufo bench` refuses a
-workload whose depth plus prompt or generation tokens exceeds 262144. With
-the flag, the factor is context / 262144 (`--context 409600` gives 1.5625).
+start with `--context` above 262144 without it, and `gufo bench`, which has no
+`--enable-yarn`, stays within the native context. With the flag, the factor
+is context / 262144 (`--context 409600` gives 1.5625).
 The flag is an error at or below 262144, where it would have no effect.
 Static YaRN applies to every request on that server, including short ones,
 and changes the output distribution more as the factor grows; in the first
@@ -118,10 +118,10 @@ hidden states and mRoPE. Image snapshots require matching prompt attachment.
 
 ## Tools and artifacts
 
-Model tests are in `tests/models/qwen38_flash_next`, focused microbenchmarks in
+Model tests are in `src/models/qwen38_flash_next/tests`, focused microbenchmarks in
 `tools/qwen-flash`. [Quality](QUALITY.md) summarizes qualification and focused checks.
 Build a microbenchmark with
-`nix develop -c tools/bench/build.sh tools/qwen-flash/projection_plans.hip`;
+`tools/bench/build.sh tools/qwen-flash/projection_plans.hip`;
 `dense_blaslt_sweep.hip` times hipBLASLt on the dense prefill shapes.
 No historical logit dump is required. New retained result summaries belong in
 `artifacts/`; generated traces stay in the ignored top-level `artifacts/` tree.

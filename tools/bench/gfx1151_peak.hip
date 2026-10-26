@@ -1,6 +1,6 @@
 // Achievable-peak calibration for gfx1151 (Strix Halo).
 //
-// Build: nix develop -c tools/bench/build.sh gfx1151_peak
+// Build: tools/bench/build.sh gfx1151_peak
 // Run: /tmp/gfx1151_peak
 //
 // Every accumulator is consumed, every thread has a separate checksum, and

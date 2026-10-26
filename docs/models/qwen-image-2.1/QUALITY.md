@@ -33,10 +33,16 @@ Latest full-resolution edit qualification: October 2, 2026.
 
 ## Reproduce
 
+The Rust engine (`src/models/qwen_image_21`) reproduces the C++ engine bit
+for bit: every observed tensor and image of `tests/parity.rs` and the PNG
+decoding of `tests/decode.rs` match fixtures recorded from C++. The official
+reference tooling compares either engine with Diffusers:
+
 ```sh
-nix develop -c cmake --build --preset gpu-test \
-  --target qwen_image_21_test qwen_image_21_kernel_test qwen_image_21_probe
-nix develop -c ./build/gpu-test/qwen_image_21_kernel_test
+cargo test --profile gpu-test -p gufo-qwen-image-21 --features gpu,models
+# In a C++ checkout of gufo-org/gufo, whose engine the Rust
+# one reproduces bit for bit:
+nix develop -c cmake --build --preset gpu-test --target qwen_image_21_probe
 nix develop -c ./build/gpu-test/qwen_image_21_probe "$MODEL_DIR" /tmp/native-image \
   'Change the cube to blue.' 256 2 /tmp/reference.png
 nix develop -c env MIOPEN_FIND_MODE=2 TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \

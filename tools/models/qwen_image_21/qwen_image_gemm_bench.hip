@@ -1,5 +1,5 @@
 // Qwen-Image projection/score GEMM policy audit on gfx1151.
-// Build: nix develop -c tools/bench/build.sh
+// Build: tools/bench/build.sh
 // tools/models/qwen_image_21/qwen_image_gemm_bench.hip Compare each library
 // candidate to sampled FP64 dot products on BF16 inputs.
 #include <hip/hip_runtime.h>

@@ -42,7 +42,7 @@
     "tool-reasoning": {"covers": ["continuation", "framing", "tools"], "uses": ["tokenization", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "tool-streaming": {"covers": ["limits", "streaming", "tools"], "uses": ["tokenization", "framing", "sampling", "scheduling", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "reasoning-separator": {"covers": ["continuation", "framing", "structured"], "uses": ["tokenization", "sampling", "limits", "scheduling", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
-    "reasoning-budget": {"covers": ["framing", "sampling", "streaming"], "uses": ["tokenization", "limits", "scheduling", "continuation", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/core/sampling.*", "src/core/speculative/**", "src/cli/serve/sampling_request.hpp", "tests/functional/reasoning_budget.py"]},
+    "reasoning-budget": {"covers": ["framing", "sampling", "streaming"], "uses": ["tokenization", "limits", "scheduling", "continuation", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/core/src/sampling.rs", "src/models/qwen35/src/speculative.rs", "src/cli/serve/src/sampling_request.rs", "tests/functional/reasoning_budget.py"]},
     "tools": {"covers": ["tool-schemas", "tools"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "continuation", "structured", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "auto-tools": {"covers": ["tool-schemas", "tools"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "continuation", "structured", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "tool-edges": {"covers": ["tool-schemas", "tools"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "continuation", "structured", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
@@ -60,20 +60,20 @@
     "sampling-defaults": {"covers": ["sampling"], "uses": ["tokenization", "framing", "limits", "scheduling", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "sampling-ranges": {"covers": ["sampling"], "uses": ["tokenization", "framing", "limits", "scheduling", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "batch": {"covers": ["scheduling", "streaming"], "uses": ["tokenization", "framing", "sampling", "limits", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
-    "long-context": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "src/models/qwen38_flash_next/**"]},
+    "long-context": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "src/models/qwen38_flash_next/**"]},
     "state-edges": {"covers": ["limits", "tool-schemas", "tools", "vision"], "uses": ["tokenization", "framing", "sampling", "scheduling", "continuation", "structured", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "progress": {"covers": ["limits", "scheduling", "streaming", "vision"], "uses": ["tokenization", "framing", "sampling", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "stream-start": {"covers": ["scheduling", "streaming"], "uses": ["tokenization", "framing", "sampling", "limits", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "prefill-scheduling": {"covers": ["scheduling"], "uses": ["tokenization", "framing", "sampling", "limits", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "metrics": {"covers": ["accounting", "streaming"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "continuation", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
     "cache-edits": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false},
-    "cache-growth": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_growth.py"]},
-    "cache-depth": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "src/models/qwen38_flash_next/**", "tests/functional/cache_depth.py"]},
-    "cache-stalls": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "scheduling", "generation"], "status": "active", "profiles": ["flash-next-q4/off", "flash-next-q4/mtp"], "configuration": "cache-stalls", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_stalls.py"]},
-    "cache-rotation": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_rotation.py"]},
-    "cache-concurrency": {"covers": ["continuation", "scheduling"], "uses": ["tokenization", "framing", "sampling", "limits", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_concurrency.py"]},
-    "cache-shared-prefix": {"covers": ["continuation", "scheduling"], "uses": ["tokenization", "framing", "sampling", "limits", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_shared_prefix.py"]},
-    "cache-bridge": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "cache-pressure", "vision_required": false, "tier": "release", "escalate": ["src/cache/**", "src/cli/serve/continuation_*", "src/cli/serve/component_text_cache.*", "src/cli/serve/component_cache_metrics.hpp", "src/cli/serve/text_generation_scheduler.*", "src/cli/serve/text_model_runner.*", "src/models/qwen38_flash_next/continuation_*", "tests/functional/cache_bridge.py"]},
+    "cache-growth": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_growth.py"]},
+    "cache-depth": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "src/models/qwen38_flash_next/**", "tests/functional/cache_depth.py"]},
+    "cache-stalls": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "scheduling", "generation"], "status": "active", "profiles": ["flash-next-q4/off", "flash-next-q4/mtp"], "configuration": "cache-stalls", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_stalls.py"]},
+    "cache-rotation": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "single-session", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_rotation.py"]},
+    "cache-concurrency": {"covers": ["continuation", "scheduling"], "uses": ["tokenization", "framing", "sampling", "limits", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_concurrency.py"]},
+    "cache-shared-prefix": {"covers": ["continuation", "scheduling"], "uses": ["tokenization", "framing", "sampling", "limits", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "standard", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_shared_prefix.py"]},
+    "cache-bridge": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "active", "configuration": "cache-pressure", "vision_required": false, "tier": "release", "escalate": ["src/cli/serve/src/continuation_cache.rs", "src/cli/serve/src/disk_store/*", "src/cli/serve/src/publication_wait.rs", "src/cli/serve/src/scheduler/*", "src/cli/serve/src/scheduled_backend.rs", "src/core/src/text/runner.rs", "src/cli/serve/src/pool/*", "src/models/qwen38_flash_next/src/snapshot.rs", "src/models/qwen38_flash_next/src/checkpoint.rs", "tests/functional/cache_bridge.py"]},
     "cache-compaction": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "deferred", "configuration": "single-session", "vision_required": false},
     "cache-transforms": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "deferred", "configuration": "standard", "vision_required": false},
     "cache-pressure": {"covers": ["continuation"], "uses": ["tokenization", "framing", "sampling", "limits", "scheduling", "structured", "tool-schemas", "generation"], "status": "deferred", "configuration": "cache-pressure", "vision_required": false},
@@ -104,7 +104,6 @@
     {
       "id": "qualification-metadata",
       "paths": [
-        "docs/FUNCTIONAL-IMPACT.md",
         "tests/functional/**",
         "tools/gufo/**"
       ],
@@ -130,8 +129,9 @@
       "paths": [
         "src/core/**",
         "src/cli/**",
-        "src/cache/**",
-        "src/runtime/**"
+        "src/hip/**",
+        "src/formats/**",
+        "src/kernel_build/**"
       ],
       "priority": 10,
       "profiles": [
@@ -153,9 +153,11 @@
     {
       "id": "build-and-toolchain",
       "paths": [
-        "CMakeLists.txt",
-        "CMakePresets.json",
-        "cmake/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "clippy.toml",
         "flake.nix",
         "flake.lock",
         ".devops/**",
@@ -177,14 +179,15 @@
         "*"
       ],
       "obligations": [
-        "Affected image/audio/video model checks."
+        "Affected image/audio model checks."
       ],
       "ignored": false
     },
     {
       "id": "qwen27-runtime",
       "paths": [
-        "src/models/qwen/**"
+        "src/models/qwen/**",
+        "src/models/qwen35/**"
       ],
       "priority": 10,
       "profiles": [
@@ -234,9 +237,8 @@
     {
       "id": "shared-qwen-framing",
       "paths": [
-        "src/models/qwen/chat_template.*",
-        "src/models/qwen/tokenizer.*",
-        "src/models/qwen/control_tokens.hpp"
+        "src/models/qwen/src/chat_template.rs",
+        "src/core/src/qwen_tokenizer.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -251,14 +253,15 @@
         "*"
       ],
       "obligations": [
-        "Audit Qwen-Image, Qwen3-TTS and MiniMax H3 shared consumers; their checks are outside this planner."
+        "Audit Qwen-Image and Qwen3-TTS shared consumers; their checks are outside this planner."
       ],
       "ignored": false
     },
     {
       "id": "shared-qwen-vision",
       "paths": [
-        "src/models/qwen/vision/**"
+        "src/models/qwen/vision/**",
+        "src/models/qwen/src/vision/**"
       ],
       "priority": 20,
       "profiles": [
@@ -278,9 +281,7 @@
     {
       "id": "dflash2",
       "paths": [
-        "src/models/qwen/hip/dflash/**",
-        "src/models/qwen/hip/dflash.hpp",
-        "src/models/qwen/dflash_*",
+        "src/models/qwen35/src/dflash/**",
         "src/models/qwen/hip/kernels/dflash_kernels.*"
       ],
       "priority": 20,
@@ -301,7 +302,8 @@
     {
       "id": "flash-next-continuation",
       "paths": [
-        "src/models/qwen38_flash_next/continuation_*"
+        "src/models/qwen38_flash_next/src/snapshot.rs",
+        "src/models/qwen38_flash_next/src/checkpoint.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -317,10 +319,9 @@
     {
       "id": "text-continuation",
       "paths": [
-        "src/cache/**",
-        "src/cli/serve/continuation_*",
-        "src/cli/serve/component_text_cache.hpp",
-        "src/cli/serve/component_cache_metrics.hpp"
+        "src/cli/serve/src/continuation_cache.rs",
+        "src/cli/serve/src/disk_store/*",
+        "src/cli/serve/src/publication_wait.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -342,9 +343,9 @@
     {
       "id": "structured-output",
       "paths": [
-        "src/core/json_constraint.*",
-        "src/core/json_schema_*",
-        "src/cli/serve/response_format.hpp"
+        "src/core/src/json_constraint.rs",
+        "src/core/src/json_constraint/**",
+        "src/cli/serve/src/response_format.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -367,10 +368,9 @@
     {
       "id": "sampling",
       "paths": [
-        "src/core/sampling.*",
-        "src/core/text_sampling_defaults.hpp",
-        "src/cli/sampling_options.hpp",
-        "src/cli/serve/sampling_request.hpp"
+        "src/core/src/sampling.rs",
+        "src/cli/src/sampling_options.rs",
+        "src/cli/serve/src/sampling_request.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -392,8 +392,8 @@
     {
       "id": "framing-and-stops",
       "paths": [
-        "src/cli/serve/quote_tracker.hpp",
-        "src/cli/serve/stop_sequences.hpp"
+        "src/cli/serve/src/quote_tracker.rs",
+        "src/cli/serve/src/stop_sequences.rs"
       ],
       "priority": 20,
       "profiles": [
@@ -420,8 +420,7 @@
         "src/models/embedding_gemma2/**",
         "src/models/qwen3_asr/**",
         "src/models/qwen3_tts/**",
-        "src/models/qwen_image_21/**",
-        "src/models/minimax_h3/**"
+        "src/models/qwen_image_21/**"
       ],
       "priority": 10,
       "profiles": [],

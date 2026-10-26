@@ -16,8 +16,9 @@ been removed; retained matrix fragments use AMD WMMA/MFMA. Headers use the
 `.hpp` suffix. Gufo owns scheduling and HIP graphs.
 
 When importing an upstream fix, preserve the Gufo namespace, adapter and
-HIP-only dispatch, update the pin, and run the Flash-Next operator tests
-under `tests/models/qwen38_flash_next/` plus the AR/MTP session replay.
-The routed GEMM test compares supported formats against a floating-point
-reference and checks the paired adapter against two separate projections.
-Build and validate through Nix as described in `AGENTS.md`.
+HIP-only dispatch, update the pin, and run the kernel crate's tests
+(`cargo test --profile gpu-test -p gufo-qwen38-flash-next-kernels --features
+gufo-hip/gpu,gufo-qwen38-flash-next-kernels/gpu`) plus the model's forward,
+session and MTP parity tests. The C++ operator
+tests that compared every routed format against a floating-point reference
+went with the C++ engine; an upstream v0.23.0 checkout keeps them.

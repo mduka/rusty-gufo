@@ -1,12 +1,31 @@
 # Qwen3.8 Flash-Next experiments
 
+## Rust engine (October 2026)
+
+Changes of the Rust engine beyond upstream, each measured against the build
+before it with `tools/bench/ab.py` (ABBA rounds); the program is in
+[optimizations](../../OPTIMIZATIONS.md). The port runs upstream's kernels:
+the retained changes are kept apart, to land as kernel changes of their own.
+
+| Experiment | Outcome |
+| --- | --- |
+| Logits through host-visible memory (F1) | Retained; a compute-queue kernel writes the logit rows into managed memory instead of a copy-engine download, so snapshot copies no longer wait behind every token. Serving c2 −0.5% (two `ab.py serve` runs), everything else level; outputs identical. |
+| Graphs for batched decode and MTP (G2) | Rejected without implementation: AR decode with graphs disabled ran as fast as with them (tg128 26.89/26.90 against 26.82/26.85 tok/s), eager launches stay ahead of the GPU. The ~9% GPU idle per token is the ~2 µs between dependent kernels and the token boundary. |
+| Shared Q8_1 rows for the routed experts (F8 step 1) | Retained; the routed gate/up vector projection reads the shared expert's Q8_1 rows of `mixed` instead of quantizing them again (46 kernels fewer per decode step, bit for bit by `src/models/qwen38_flash_next/kernels/tests/moe_gated.rs`). AR tg128 −0.23%, MTP −0.17% (`ab.py`, ABBA); outputs identical. |
+| Q8_1 rows from the SiLU scale and the HC combine (F8 step 2) | Retained; the mixer activation and the combine write the Q8_1 rows of the next decode GEMV, 188 kernels fewer per step (bit for bit by `src/models/qwen38_flash_next/kernels/tests/q8_rows.rs`). AR tg128 −0.73%, MTP −0.73% (`ab.py`, ABBA); outputs identical. Without hiding the value from fast math, an FMA changed the sum of a block with heavy cancellation. |
+| Q8_1 rows from the HC mix epilogue, GatedDeltaNet epilogue and attention gate (F8 step 2) | Retained; the producers of `mixed`, the GatedDeltaNet rows and the gated attention rows write the Q8_1 rows of the decode GEMV after them, 142 kernels fewer per step (bit for bit by `src/models/qwen38_flash_next/kernels/tests/q8_rows.rs`). AR tg128 −0.77%, MTP −0.69% (`ab.py`, ABBA); outputs identical. |
+| Register HC combine (F9) | Retained; the decode combine issues each thread's loads first and keeps the residual in registers between its passes, 9.9 → 5.0 µs per call (traced), equal to the scalar kernel bit for bit. AR tg128 −1.26%, MTP −0.67% (`ab.py`, ABBA); outputs identical. |
+| Four-stream HC mix epilogue (F9) | Retained; values, gates and inject weights load before the arithmetic, 7.4 → 3.4 µs per call (traced), equal to the scalar kernel bit for bit. AR tg128 −1.0%, MTP −0.57% (`ab.py`, ABBA); outputs identical. |
+| Load-ahead small GEMM (F9) | Retained; aligned router, alpha/beta and attention F16 projections load up to ten K steps ahead with wide loads and the scalar kernel's folded FMA chain: 27.8/14.7/16 → 14.0/3.95/5.2 µs (traced), equal to the scalar kernel bit for bit. AR tg128 −3.3%, MTP −1.9% (`ab.py`, ABBA); prefill and outputs unchanged. |
+| Stall after the PLE convolution (F7) | Not real: `rocprofv3 --kernel-trace` intercepts packets inside the graph launch and starved the GPU there; untraced GPU clock probes time the PLE convolution block at 14 µs. |
+
 ## Selector scheduling on newer LLVM (October 23, 2026)
 
 | Experiment | Outcome |
 | --- | --- |
 | Keep one selector query head live on Clang 23 and newer | Retained: full head unrolling causes 304 scalar-register spills with ROCm 10.1's Clang 24; the bounded loop reduces this to 18 and VGPR use from 169 to 164. Neither 10.1 variant uses private scratch; the original Clang 23 build does. The F32 queries, FMA sequence, reduction tree and selected blocks stay unchanged. On Clang 24, the isolated 64-query × 8,192-block scorer falls from 109.3 to 76.3 µs, with identical output bytes. Clang 22 retains its original unrolling. |
 | Reproduce older activation rounding on newer compilers | Rejected: first-layer Q8 codes differ at 37 of 327,680 values; the newer compiler agrees more often with independent FP32 and FP64 calculations. Restoring the old fused remainder matches the first mixer but does not recover sampled thinking throughput. Production rounding and sampling remain unchanged. |
-| Price the actual C1 sampled draft head | Retained with the compact target path: fixed-history measurements replace full-head estimates only for eligible sampled C1 cycles. The first cycle and short tails keep their established costs; the focused short-reply control passes all 84 phases. Full target-row verification also keeps the original curve, removing a thinking/tool pause increase (111 → 120 ms, then 113 ms with the guard; all 63 focused phases pass). Full-head, greedy and concurrent curves stay unchanged. See [migration qualification and timing limits](ROCM.md). |
+| Price the actual C1 sampled draft head | Retained with the compact target path: fixed-history measurements replace full-head estimates only for eligible sampled C1 cycles. The first cycle and short tails keep their established costs; the focused short-reply control passes all 84 phases. Full target-row verification also keeps the original curve, removing a thinking/tool pause increase (111 → 120 ms, then 113 ms with the guard; all 63 focused phases pass). Full-head, greedy and concurrent curves stay unchanged. See [migration qualification and timing limits](https://github.com/gufo-org/gufo/blob/v0.23.0/docs/models/qwen3.8-flash-next/ROCM.md). |
 
 The scorer measurement is the median of five warmed calls with production
 compiler flags. Full-model and request-level qualification are recorded in

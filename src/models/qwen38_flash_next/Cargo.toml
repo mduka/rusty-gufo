@@ -1,0 +1,39 @@
+[package]
+name = "gufo-qwen38-flash-next"
+version = "0.0.0"
+description = "Qwen3.8-Flash-Next text generation on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The C++ sources, kernels and tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device and the model:
+# cargo test -p gufo-qwen38-flash-next --features gpu
+gpu = []
+# Tests that need the model files but no device:
+# cargo test -p gufo-qwen38-flash-next --features models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-formats.workspace = true
+gufo-hip.workspace = true
+libc.workspace = true
+gufo-qwen38-flash-next-kernels = { path = "kernels" }
+# The batched greedy argmax of verification rows.
+gufo-qwen-kernels = { path = "../qwen/kernels" }
+# The Qwen3.8 chat template the runner renders prompts with.
+gufo-qwen = { path = "../qwen" }
+
+[dev-dependencies]
+# The scheduled backend of the serving QUALITY check.
+gufo-serve.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

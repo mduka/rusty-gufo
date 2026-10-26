@@ -587,21 +587,3 @@ __global__ static void indexer_partial_topk_kernel(uint32_t* selected,
   }
 }
 
-// Partial selection also avoids sorting most scores in wide prefill batches.
-// The parallel tree covers contexts beyond the register-resident input range.
-static bool indexer_partial_topk_launch(uint32_t* selected, const float* scores,
-                                        uint32_t n_comp, uint32_t n_tokens,
-                                        uint32_t top_k) {
-  if (top_k != 512u || n_comp <= 1024u || n_comp > 32768u || n_tokens == 0u)
-    return false;
-  if (n_comp <= 8192u)
-    indexer_partial_topk_kernel<8192>
-        <<<n_tokens, 256>>>(selected, scores, n_comp, n_tokens);
-  else if (n_comp <= 16384u)
-    indexer_partial_topk_kernel<16384>
-        <<<n_tokens, 256>>>(selected, scores, n_comp, n_tokens);
-  else
-    indexer_partial_topk_kernel<32768, 512>
-        <<<n_tokens, 512>>>(selected, scores, n_comp, n_tokens);
-  return true;
-}

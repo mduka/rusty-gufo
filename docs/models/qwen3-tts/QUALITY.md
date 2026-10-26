@@ -51,13 +51,15 @@ The paragraph is:
 
 ## Reproduce
 
-Use the [variant contracts and reference checks](../../../tests/models/qwen3_tts)
-and [intelligibility tool](../../../tests/models/qwen3_tts/quality/README.md).
+The Rust engine (`src/models/qwen3_tts`) reproduces the C++ engine's codes
+and samples bit for bit on the cases of `tests/parity.rs` (the fixture
+`tests/fixtures/qwen3-tts-parity.json` holds the C++ outcomes). The official
+reference tooling stays in [`tests/models/qwen3_tts`](../../../tests/models/qwen3_tts)
+with the [intelligibility tool](../../../tests/models/qwen3_tts/quality/README.md).
 Base requires a reference WAV and its complete matching transcript.
 
 ```sh
-nix develop -c cmake --build --preset gpu-test --target qwen3_tts_synthesis_hip_test
-nix develop -c ./build/gpu-test/qwen3_tts_synthesis_hip_test "$TTS_MODEL"
+cargo test --profile gpu-test -p gufo-qwen3-tts --features gpu,models
 nix develop -c tools/audio/run_ref_tts.sh greedy
 ```
 

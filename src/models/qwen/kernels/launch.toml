@@ -1,0 +1,1997 @@
+# Kernel contract for the Qwen3.8 27B text engine (docs/RUST.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes (tests/extents.rs).
+
+[library]
+name = "qwen"
+root = "../../../.."
+namespace = "gufo::hip"
+format_type = "gufo::core::GgmlType"
+headers = [
+  "src/models/qwen/hip/ops.hpp",
+  "src/models/qwen/hip/ops/prefill_fp16.hpp",
+  "src/models/qwen/hip/kernels/dflash_kernels.hpp",
+  "src/models/qwen/kernels/adapters.hpp",
+  "src/models/qwen/vision/kernels.hpp",
+]
+
+[[source]]
+path = "src/models/qwen/vision/kernels.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_batched.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_decode.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_decode_verify_wave64.hip"
+flags = ["-mwavefrontsize64"]
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_decode_graph.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_tile.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/attention_wmma.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/dflash_kernels.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/embed.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/fused.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/gemv.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/gemv_quant.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/norm.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_embed.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_fp16.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_gemm.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_norm.hip"
+
+# SLP vectorization puts the K-quant scales and offsets of the blocked
+# prefill GEMMs into wide register tuples. With clang 23 the Q3_K and Q6_K
+# 128x128 tiles then spill, so the two units build without it.
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_quant_gemm.hip"
+flags = ["-fno-slp-vectorize"]
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_quant_wave64.hip"
+flags = ["-mwavefrontsize64", "-fno-slp-vectorize"]
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_residual.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_rope.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_ssm.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_swiglu.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/prefill_unpack.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/qkv.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/residual.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/rope.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/sample.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/small_batch_quant16_wave64.hip"
+flags = ["-mwavefrontsize64", "-gline-tables-only", "-Xarch_device", "-mllvm=-amdgpu-sched-strategy=iterative-ilp"]
+
+[[source]]
+path = "src/models/qwen/hip/kernels/small_batch_wave64.hip"
+flags = ["-mwavefrontsize64"]
+
+[[source]]
+path = "src/models/qwen/hip/kernels/ssm.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/ssm_decode_recurrence.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/ssm_recurrence.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/ssm_row_split.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/swiglu.hip"
+
+[[source]]
+path = "src/models/qwen/hip/kernels/unpack.hip"
+
+[[source]]
+path = "src/models/qwen/hip/attention.hip"
+
+[[source]]
+path = "src/models/qwen/hip/batched_ssm.hip"
+
+[[source]]
+path = "src/models/qwen/kernels/adapters.hip"
+
+# --- Decode (one token) -------------------------------------------------------
+
+[[launcher]]
+name = "embedding_lookup"
+cpp = "LaunchEmbeddingLookup"
+returns = "void"
+doc = "Embedding row of the token in `token_id` (device memory), decoded to f32."
+params = [
+  { name = "table", kind = "quant", rows = "rows", cols = "hidden_size", formats = ["F32", "BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "table_type", kind = "format", of = "table" },
+  { name = "token_id", kind = "indices", len = "1", below = "rows" },
+  { name = "out_hidden", kind = "out", elem = "f32", len = "hidden_size" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { table = "Q4_K", hidden_size = 5120, rows = 3 },
+  { table = "F32", hidden_size = 300, rows = 1 },
+]
+
+[[launcher]]
+name = "embedding_lookup_token"
+cpp = "LaunchEmbeddingLookup"
+returns = "void"
+doc = "Embedding row of the host token `token_id`, decoded to f32 (the Qwen3-TTS code predictor)."
+params = [
+  { name = "table", kind = "quant", rows = "rows", cols = "hidden_size", formats = ["F32", "BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "table_type", kind = "format", of = "table" },
+  { name = "token_id", kind = "scalar", type = "u32" },
+  { name = "out_hidden", kind = "out", elem = "f32", len = "hidden_size" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["token_id < rows"]
+probes = [
+  { table = "BF16", token_id = 2, hidden_size = 2048, rows = 3 },
+  { table = "Q4_K", token_id = 0, hidden_size = 256, rows = 1 },
+]
+
+[[launcher]]
+name = "float_to_bf16"
+cpp = "LaunchFloatToBfloat16"
+returns = "void"
+doc = "Rounds f32 values to BF16 (round to nearest even)."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "num_elements" },
+  { name = "output", kind = "out", elem = "bf16", len = "num_elements" },
+  { name = "num_elements", kind = "scalar", type = "usize" },
+]
+probes = [{ num_elements = 4096 }, { num_elements = 1 }]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "LaunchRMSNorm"
+returns = "void"
+doc = "RMSNorm of one row (the 5120-wide Qwen27B row stays in registers)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "out", kind = "out", elem = "f32", len = "dim" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { dim = 5120, eps = 1e-6 },
+  { dim = 17, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "residual_add"
+cpp = "LaunchResidualAdd"
+returns = "void"
+doc = "`hidden += update`."
+params = [
+  { name = "a", kind = "alias", of = "hidden", elem = "f32", read_only = true },
+  { name = "update", kind = "in", elem = "f32", len = "dim" },
+  { name = "hidden", kind = "inout", elem = "f32", len = "dim" },
+  { name = "dim", kind = "scalar", type = "usize" },
+]
+probes = [
+  { dim = 5120 },
+  { dim = 1 },
+]
+
+[[launcher]]
+name = "unpack_qg"
+cpp = "LaunchUnpackQG"
+returns = "void"
+doc = "Splits interleaved [Q_h, Gate_h] head pairs into Q and Gate."
+params = [
+  { name = "qg_interleaved", kind = "in", elem = "f32", len = "2 * num_heads * head_dim" },
+  { name = "q_out", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "gate_out", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+probes = [
+  { num_heads = 24, head_dim = 256 },
+  { num_heads = 1, head_dim = 3 },
+]
+
+[[launcher]]
+name = "fused_qkv_projections"
+cpp = "LaunchFusedQKVProjections"
+returns = "void"
+doc = "Q (with its interleaved gate), K and V projections of one row in one dispatch."
+params = [
+  { name = "q_w", kind = "quant", rows = "q_dim", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "q_type", kind = "format", of = "q_w" },
+  { name = "k_w", kind = "quant", rows = "kv_dim", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "k_type", kind = "format", of = "k_w" },
+  { name = "v_w", kind = "quant", rows = "kv_dim", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "v_type", kind = "format", of = "v_w" },
+  { name = "x", kind = "in", elem = "f32", len = "hidden_size" },
+  { name = "q_out", kind = "out", elem = "f32", len = "q_dim" },
+  { name = "k_out", kind = "out", elem = "f32", len = "kv_dim" },
+  { name = "v_out", kind = "out", elem = "f32", len = "kv_dim" },
+  { name = "q_dim", kind = "scalar", type = "usize" },
+  { name = "kv_dim", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+]
+probes = [
+  { q_w = "Q5_K", k_w = "Q6_K", v_w = "Q8_0", q_dim = 12288, kv_dim = 1024, hidden_size = 5120 },
+  { q_w = "IQ4_XS", k_w = "Q4_K", v_w = "Q5_K", q_dim = 8, kv_dim = 4, hidden_size = 256 },
+  { q_w = "BF16", k_w = "BF16", v_w = "BF16", q_dim = 1024, kv_dim = 256, hidden_size = 1024 },
+]
+
+[[launcher]]
+name = "fused_qk_norm_rope_kv_write"
+cpp = "LaunchFusedQKNormRoPEKvWrite"
+returns = "void"
+doc = "Per-head Q/K RMSNorm and RoPE in place, and the K/V write into the FP16 cache at position `pos`."
+requires = ["head_dim <= 256", "rotary_dim <= head_dim", "rotary_dim % 2 == 0"]
+params = [
+  { name = "q_in", kind = "alias", of = "q", elem = "f32", read_only = true },
+  { name = "k_in", kind = "alias", of = "k", elem = "f32", read_only = true },
+  { name = "v", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "q_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "q", kind = "inout", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "inout", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  # FP16 caches [layer][max_context][num_kv_heads * head_dim]; this launch
+  # writes layer `layer_idx` only.
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "indices", len = "1", below = "max_context" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rotary_dim", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "rope", kind = "table", elem = "i32", width = 3, cpp_type = "const gufo::models::qwen::vision::DeviceRope*", optional = true },
+]
+probes = [
+  { layer_idx = 2, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256, rotary_dim = 64, rope_theta = 1e7, eps = 1e-6 },
+  { layer_idx = 0, max_context = 1, num_heads = 2, num_kv_heads = 1, head_dim = 16, rotary_dim = 16, rope_theta = 1e4, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "attention_graph"
+cpp = "LaunchAttention"
+returns = "void"
+doc = "Decode attention with gate over the FP16 cache rows 0..=pos, position read from device memory (graph form, below the split-K threshold)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "indices", len = "1", below = "max_context" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  # The fused QK-norm kernel already wrote the cache.
+  { name = "skip_kv_write", kind = "const", cpp_type = "bool", value = "true" },
+]
+probes = [
+  { layer_idx = 1, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+]
+
+[[launcher]]
+name = "gpu_sampling"
+cpp = "LaunchGPUSamplingFlat"
+returns = "void"
+doc = "One token from a logits row under the sampling policy (penalties, temperature, top-k/p, min-p) with the draw `uniform`; argmax without temperature."
+requires = ["vocab_size > 0"]
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "vocab_size" },
+  { name = "out_token", kind = "out", elem = "u32", len = "1" },
+  { name = "vocab_size", kind = "scalar", type = "usize" },
+  { name = "temperature", kind = "scalar", type = "f32" },
+  { name = "top_k", kind = "scalar", type = "i32" },
+  { name = "top_p", kind = "scalar", type = "f32" },
+  { name = "min_p", kind = "scalar", type = "f32" },
+  { name = "min_keep", kind = "scalar", type = "usize" },
+  { name = "repeat_penalty", kind = "scalar", type = "f32" },
+  { name = "frequency_penalty", kind = "scalar", type = "f32" },
+  { name = "presence_penalty", kind = "scalar", type = "f32" },
+  { name = "uniform", kind = "scalar", type = "f64" },
+  # sampling::TokenPenalty as three words: token, generated count, repeated.
+  { name = "penalties", kind = "in", elem = "u32", len = "penalty_count * 3" },
+  { name = "penalty_count", kind = "scalar", type = "usize" },
+  { name = "adjusted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "sorted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sorted_token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sort_storage", kind = "out", elem = "bytes", len = "sort_storage_bytes" },
+  { name = "sort_storage_bytes", kind = "scalar", type = "usize" },
+]
+probes = [
+  { vocab_size = 248320, temperature = 0.8, top_k = 40, top_p = 0.95, min_p = 0.05, min_keep = 1, repeat_penalty = 1.1, frequency_penalty = 0.0, presence_penalty = 0.0, uniform = 0.5, penalty_count = 3, sort_storage_bytes = 16777216 },
+  { vocab_size = 7, temperature = 0.0, top_k = 0, top_p = 1.0, min_p = 0.0, min_keep = 0, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, uniform = 0.0, penalty_count = 0, sort_storage_bytes = 4096 },
+]
+
+[[launcher]]
+name = "packed_quant_swiglu_fp32"
+cpp = "TryLaunchPackedQuantSwiGLUFp32"
+returns = "supported"
+doc = "`silu(x gate^T) * (x up^T)` over adjacent gate and up rows read as one matrix, with the exact small-batch arithmetic; only for the 27B FFN at 14 rows or 16 to 64 rows in steps of 16."
+params = [
+  { name = "gate_up_type", kind = "format", of = "gate_up" },
+  { name = "gate_up", kind = "quant", rows = "2 * intermediate_size", cols = "hidden_size", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "input", kind = "in", elem = "f32", len = "batch_size * hidden_size" },
+  { name = "output", kind = "out", elem = "f32", len = "batch_size * intermediate_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "intermediate_size", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+]
+probes = [
+  { gate_up = "Q4_K", batch_size = 16, intermediate_size = 17408, hidden_size = 5120 },
+  { gate_up = "Q4_K", batch_size = 14, intermediate_size = 17408, hidden_size = 5120 },
+  { gate_up = "Q5_K", batch_size = 64, intermediate_size = 17408, hidden_size = 5120 },
+  { gate_up = "IQ4_XS", batch_size = 32, intermediate_size = 17408, hidden_size = 5120 },
+]
+
+[[launcher]]
+name = "gpu_speculative_sampling"
+cpp = "LaunchGPUSpeculativeSamplingFlat"
+returns = "void"
+doc = "Lossless speculative sampling of one verification row: accepts `draft_token` with probability min(1, p/q) under the target policy, else draws from the residual of the draft candidates; `out_accepted` is 1 on acceptance."
+requires = ["vocab_size > 0", "candidate_count > 0"]
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "vocab_size" },
+  { name = "out_token", kind = "out", elem = "u32", len = "1" },
+  { name = "out_accepted", kind = "out", elem = "u32", len = "1" },
+  { name = "vocab_size", kind = "scalar", type = "usize" },
+  { name = "temperature", kind = "scalar", type = "f32" },
+  { name = "top_k", kind = "scalar", type = "i32" },
+  { name = "top_p", kind = "scalar", type = "f32" },
+  { name = "min_p", kind = "scalar", type = "f32" },
+  { name = "min_keep", kind = "scalar", type = "usize" },
+  { name = "repeat_penalty", kind = "scalar", type = "f32" },
+  { name = "frequency_penalty", kind = "scalar", type = "f32" },
+  { name = "presence_penalty", kind = "scalar", type = "f32" },
+  { name = "draft_token", kind = "scalar", type = "u32" },
+  { name = "draft_token_probability", kind = "scalar", type = "f32" },
+  { name = "candidate_ids", kind = "in", elem = "u32", len = "candidate_count" },
+  { name = "candidate_probabilities", kind = "in", elem = "f32", len = "candidate_count" },
+  { name = "candidate_count", kind = "scalar", type = "usize" },
+  { name = "acceptance_uniform", kind = "scalar", type = "f64" },
+  { name = "residual_uniform", kind = "scalar", type = "f64" },
+  # sampling::TokenPenalty as three words: token, generated count, repeated.
+  { name = "penalties", kind = "in", elem = "u32", len = "penalty_count * 3" },
+  { name = "penalty_count", kind = "scalar", type = "usize" },
+  { name = "adjusted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "sorted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sorted_token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sort_storage", kind = "out", elem = "bytes", len = "sort_storage_bytes" },
+  { name = "sort_storage_bytes", kind = "scalar", type = "usize" },
+]
+probes = [
+  { vocab_size = 248320, temperature = 0.8, top_k = 40, top_p = 0.9, min_p = 0.05, min_keep = 2, repeat_penalty = 1.1, frequency_penalty = 0.2, presence_penalty = 0.1, draft_token = 7, draft_token_probability = 0.5, candidate_count = 8, acceptance_uniform = 0.25, residual_uniform = 0.5, penalty_count = 3, sort_storage_bytes = 16777216 },
+  { vocab_size = 248320, temperature = 0.7, top_k = 0, top_p = 1.0, min_p = 0.0, min_keep = 0, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, draft_token = 3, draft_token_probability = 0.9, candidate_count = 4, acceptance_uniform = 0.95, residual_uniform = 0.1, penalty_count = 0, sort_storage_bytes = 16777216 },
+  { vocab_size = 9, temperature = 1.0, top_k = 0, top_p = 1.0, min_p = 0.0, min_keep = 0, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, draft_token = 2, draft_token_probability = 0.3, candidate_count = 2, acceptance_uniform = 0.5, residual_uniform = 0.5, penalty_count = 1, sort_storage_bytes = 4096 },
+]
+
+[[launcher]]
+name = "sort_logits"
+cpp = "LaunchGPUSortLogitsFlat"
+returns = "void"
+doc = "The finite logits of one row in descending order, ascending IDs on ties and nonfinite values last, into `sorted_logits`/`sorted_token_ids`; with a nonzero `keep` only their exact first `keep` entries, the bounded top-32/64 selection of the samplers."
+requires = ["vocab_size > 0", "keep <= vocab_size"]
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "vocab_size" },
+  { name = "adjusted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "sorted_logits", kind = "out", elem = "f32", len = "vocab_size" },
+  { name = "token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sorted_token_ids", kind = "out", elem = "u32", len = "vocab_size" },
+  { name = "sort_storage", kind = "out", elem = "bytes", len = "sort_storage_bytes" },
+  { name = "sort_storage_bytes", kind = "scalar", type = "usize" },
+  { name = "vocab_size", kind = "scalar", type = "usize" },
+  { name = "keep", kind = "scalar", type = "usize" },
+]
+probes = [
+  { vocab_size = 248320, keep = 0, sort_storage_bytes = 16777216 },
+  { vocab_size = 248320, keep = 20, sort_storage_bytes = 16777216 },
+  { vocab_size = 248320, keep = 64, sort_storage_bytes = 16777216 },
+  { vocab_size = 1025, keep = 33, sort_storage_bytes = 1048576 },
+  { vocab_size = 1023, keep = 1, sort_storage_bytes = 1048576 },
+]
+
+[[launcher]]
+name = "dflash_selector_sampled"
+cpp = "LaunchDFlashSelectorSampledFlat"
+returns = "void"
+doc = "Sampled DFlash2 token path of `count` proposal rows at `temperature` with one draw per row, chained from the anchor, and each row's top-k candidates with their probabilities. Repeat, frequency and presence penalties evolve across the chain."
+requires = ["count > 0", "selector_rank > 0", "selector_top_k > 0", "selector_top_k <= 16", "selector_top_k <= vocab_size"]
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "count * vocab_size" },
+  { name = "projected_hidden", kind = "in", elem = "f32", len = "count * selector_rank" },
+  { name = "predecessor_codebook", kind = "in", elem = "bf16", len = "vocab_size * selector_rank" },
+  { name = "successor_codebook", kind = "in", elem = "bf16", len = "vocab_size * selector_rank" },
+  { name = "anchor", kind = "indices", len = "1", below = "vocab_size" },
+  { name = "tokens", kind = "out", elem = "u32", len = "count + 1" },
+  { name = "confidences", kind = "out", elem = "f32", len = "count" },
+  # [row][ceil(vocab / 2048)][16]
+  { name = "partial_scores", kind = "out", elem = "f32", len = "count * ((vocab_size + 2047) / 2048) * 16" },
+  { name = "partial_ids", kind = "out", elem = "u32", len = "count * ((vocab_size + 2047) / 2048) * 16" },
+  { name = "uniforms", kind = "in", elem = "f32", len = "count" },
+  { name = "candidate_ids", kind = "out", elem = "u32", len = "count * selector_top_k" },
+  { name = "candidate_probabilities", kind = "out", elem = "f32", len = "count * selector_top_k" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "temperature", kind = "scalar", type = "f32" },
+  { name = "vocab_size", kind = "scalar", type = "u32" },
+  { name = "selector_rank", kind = "scalar", type = "u32" },
+  { name = "selector_top_k", kind = "scalar", type = "u32" },
+  { name = "repeat_penalty", kind = "scalar", type = "f32" },
+  { name = "frequency_penalty", kind = "scalar", type = "f32" },
+  { name = "presence_penalty", kind = "scalar", type = "f32" },
+  { name = "repeat_last_n", kind = "scalar", type = "u32" },
+  # sampling::TokenPenalty sorted by token, three words each: token,
+  # generated count, repeated (only the counts are read).
+  { name = "penalties", kind = "in", elem = "u32", len = "penalty_count * 3", optional = true },
+  { name = "penalty_count", kind = "scalar", type = "u32" },
+  # The request's repetition window, oldest first.
+  { name = "history", kind = "in", elem = "u32", len = "history_count", optional = true },
+  { name = "history_count", kind = "scalar", type = "u32" },
+]
+probes = [
+  { count = 7, temperature = 0.8, vocab_size = 248320, selector_rank = 256, selector_top_k = 16, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, repeat_last_n = 0, penalty_count = 0, history_count = 0 },
+  { count = 1, temperature = 1.0, vocab_size = 100, selector_rank = 8, selector_top_k = 4, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, repeat_last_n = 0, penalty_count = 0, history_count = 0 },
+  { count = 7, temperature = 0.7, vocab_size = 248320, selector_rank = 256, selector_top_k = 16, repeat_penalty = 1.1, frequency_penalty = 0.2, presence_penalty = 1.5, repeat_last_n = 64, penalty_count = 5, history_count = 64, with = ["penalties", "history"] },
+]
+
+[[launcher]]
+name = "attention_write"
+cpp = "LaunchAttention"
+returns = "void"
+doc = "Decode attention with gate for one row at a scalar position: writes its K/V into the FP16 cache first, then attends rows 0..=pos; split-K when the scratch is given (batched decode)."
+requires = ["pos < max_context"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  # DecodeAttentionScratchElements: heads x 32 splits x (head_dim + 2).
+  { name = "split_k_scratch", kind = "out", elem = "f32", optional = true, len = "num_heads * 32 * (head_dim + 2)" },
+  { name = "skip_kv_write", kind = "const", cpp_type = "bool", value = "false" },
+]
+probes = [
+  { layer_idx = 1, pos = 200, max_context = 256, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+  { layer_idx = 0, pos = 5, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+]
+
+[[launcher]]
+name = "rope"
+cpp = "LaunchRoPE"
+returns = "void"
+doc = "RoPE of one row's Q and K heads in place at a scalar position."
+requires = ["rotary_dim <= head_dim", "rotary_dim % 2 == 0"]
+params = [
+  { name = "q", kind = "inout", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "inout", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rotary_dim", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "rope", kind = "table", elem = "i32", width = 3, cpp_type = "const gufo::models::qwen::vision::DeviceRope*", optional = true },
+]
+probes = [
+  { num_heads = 24, num_kv_heads = 4, head_dim = 256, rotary_dim = 64, pos = 7, rope_theta = 1e7 },
+  { num_heads = 2, num_kv_heads = 1, head_dim = 16, rotary_dim = 16, pos = 0, rope_theta = 1e4 },
+]
+
+[[launcher]]
+name = "batched_per_head_rms_norm"
+cpp = "LaunchBatchedPerHeadRMSNorm"
+returns = "void"
+doc = "RMSNorm of every head of `batch_size` rows in place, one weight row for all heads."
+requires = ["batch_size > 0"]
+params = [
+  { name = "input", kind = "alias", of = "x", elem = "f32", read_only = true },
+  { name = "weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "x", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+]
+probes = [
+  { batch_size = 8, num_heads = 24, head_dim = 256, eps = 1e-6 },
+  { batch_size = 1, num_heads = 3, head_dim = 5, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "attention_write_fp32"
+cpp = "LaunchAttention"
+returns = "void"
+doc = "Decode attention with gate for one row at a scalar position over FP32 K/V caches (the dense MTP head): writes its K/V first, then attends rows 0..=pos; split-K from a context of 128."
+requires = ["pos < max_context"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k_cache", kind = "inout", elem = "f32", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "v_cache", kind = "inout", elem = "f32", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  # The FP32 caches select the FP32 kernels; an FP16 copy would go unread.
+  { name = "k_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "v_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "out_context", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  # DecodeAttentionScratchElements: heads x 32 splits x (head_dim + 2).
+  { name = "split_k_scratch", kind = "out", elem = "f32", len = "num_heads * 32 * (head_dim + 2)" },
+  { name = "skip_kv_write", kind = "const", cpp_type = "bool", value = "false" },
+]
+probes = [
+  { layer_idx = 0, pos = 200, max_context = 256, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+  { layer_idx = 0, pos = 5, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+]
+
+[[launcher]]
+name = "per_head_rms_norm"
+cpp = "LaunchPerHeadRMSNorm"
+returns = "void"
+doc = "RMSNorm of every head of one row in place, one weight row for all heads (the dense MTP head's Q and K)."
+params = [
+  { name = "input", kind = "alias", of = "x", elem = "f32", read_only = true },
+  { name = "weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "x", kind = "inout", elem = "f32", len = "num_heads * head_dim" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+]
+probes = [
+  { num_heads = 24, head_dim = 256, eps = 1e-6 },
+  { num_heads = 3, head_dim = 5, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "attention_split_k"
+cpp = "LaunchAttention"
+returns = "void"
+doc = "Decode attention with gate over the FP16 cache rows 0..=pos with a scalar position; split-K from a context of 128."
+requires = ["pos < max_context"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "num_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx + 1) * max_context * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "pos", kind = "scalar", type = "u32" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  # DecodeAttentionScratchElements: heads x 32 splits x (head_dim + 2).
+  { name = "split_k_scratch", kind = "out", elem = "f32", len = "num_heads * 32 * (head_dim + 2)" },
+  { name = "skip_kv_write", kind = "const", cpp_type = "bool", value = "true" },
+]
+probes = [
+  { layer_idx = 1, pos = 200, max_context = 256, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+  { layer_idx = 0, pos = 5, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256 },
+]
+
+[[launcher]]
+name = "gemv"
+cpp = "LaunchGEMV"
+returns = "void"
+doc = "Decode GEMV `y = A x` over quantized weights."
+params = [
+  { name = "a", kind = "quant", rows = "m", cols = "k", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "a_type", kind = "format", of = "a" },
+  { name = "x", kind = "in", elem = "f32", len = "k" },
+  { name = "y", kind = "out", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "stream", kind = "stream" },
+  { name = "mode", kind = "const", cpp_type = "gufo::models::qwen::QwenGemmMode", value = "gufo::models::qwen::QwenGemmMode::kHipDecode" },
+]
+probes = [
+  { a = "Q6_K", m = 5120, k = 6144 },
+  { a = "IQ4_XS", m = 7, k = 256 },
+  { a = "Q8_0", m = 2, k = 64 },
+  { a = "BF16", m = 5, k = 5120 },
+  { a = "BF16", m = 3, k = 17408 },
+  { a = "BF16", m = 4, k = 100 },
+]
+
+[[launcher]]
+name = "fused_ssm_input_projections"
+cpp = "LaunchFusedSSMInputProjections"
+returns = "void"
+doc = "QKV, gate, alpha and beta projections of one row for a DeltaNet layer in one dispatch."
+params = [
+  { name = "qkv_w", kind = "quant", rows = "qkv_size", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "qkv_type", kind = "format", of = "qkv_w" },
+  { name = "gate_w", kind = "quant", rows = "inner_size", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "gate_type", kind = "format", of = "gate_w" },
+  { name = "alpha_w", kind = "quant", rows = "time_step_rank", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "alpha_type", kind = "format", of = "alpha_w" },
+  { name = "beta_w", kind = "quant", rows = "time_step_rank", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "beta_type", kind = "format", of = "beta_w" },
+  { name = "x", kind = "in", elem = "f32", len = "hidden_size" },
+  { name = "qkv_out", kind = "out", elem = "f32", len = "qkv_size" },
+  { name = "gate_out", kind = "out", elem = "f32", len = "inner_size" },
+  { name = "alpha_out", kind = "out", elem = "f32", len = "time_step_rank" },
+  { name = "beta_out", kind = "out", elem = "f32", len = "time_step_rank" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "qkv_size", kind = "scalar", type = "usize" },
+  { name = "inner_size", kind = "scalar", type = "usize" },
+  { name = "time_step_rank", kind = "scalar", type = "usize" },
+]
+probes = [
+  { qkv_w = "Q5_K", gate_w = "Q4_K", alpha_w = "Q8_0", beta_w = "Q8_0", hidden_size = 5120, qkv_size = 10240, inner_size = 6144, time_step_rank = 48 },
+  { qkv_w = "IQ4_NL", gate_w = "IQ4_XS", alpha_w = "Q8_0", beta_w = "Q8_0", hidden_size = 256, qkv_size = 3, inner_size = 2, time_step_rank = 1 },
+  { qkv_w = "BF16", gate_w = "BF16", alpha_w = "BF16", beta_w = "BF16", hidden_size = 1024, qkv_size = 6144, inner_size = 2048, time_step_rank = 16 },
+]
+
+[[launcher]]
+name = "ssm_conv_recurrence"
+cpp = "LaunchSSMConvRecurrenceFlat"
+returns = "void"
+doc = "Causal conv (kernel 4) and gated DeltaNet recurrence of one row for layer `layer_idx`, FP32 state, optional replay capture."
+params = [
+  { name = "qkv_in", kind = "in", elem = "f32", len = "qkv_size" },
+  { name = "conv_weights", kind = "in", elem = "f32", len = "qkv_size * 4" },
+  # [layer][qkv_size][4]
+  { name = "conv_state", kind = "inout", elem = "f32", len = "(layer_idx + 1) * qkv_size * 4" },
+  # The state the pass reads when it forks into `conv_state` (QwenRecurrentStateIo).
+  { name = "conv_in", kind = "in", elem = "f32", optional = true, len = "(layer_idx + 1) * qkv_size * 4" },
+  { name = "conv_out", kind = "out", elem = "f32", len = "qkv_size" },
+  # [layer][num_heads][key_dim][val_dim]
+  { name = "deltanet_state", kind = "inout", elem = "f32", len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  { name = "deltanet_in", kind = "in", elem = "f32", optional = true, len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  { name = "alpha_buf", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "beta_buf", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_a", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_dt", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_norm", kind = "in", elem = "f32", len = "val_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "num_heads * val_dim" },
+  { name = "out_buf", kind = "out", elem = "f32", len = "num_heads * val_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "qkv_size", kind = "scalar", type = "usize" },
+  { name = "num_key_heads", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "key_dim", kind = "scalar", type = "u32" },
+  { name = "val_dim", kind = "scalar", type = "u32" },
+  # Replay rings [layer][16][width], written at slot `position % 16`.
+  { name = "replay_qkv", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * qkv_size" },
+  { name = "replay_alpha", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_beta", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_position", kind = "in", elem = "u32", optional = true, len = "1" },
+  { name = "replay_enabled", kind = "in", elem = "u32", optional = true, len = "1" },
+]
+probes = [
+  { layer_idx = 1, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, replay_position = 15, replay_enabled = 1, with = ["replay_qkv", "replay_alpha", "replay_beta", "replay_position", "replay_enabled"] },
+  { layer_idx = 0, qkv_size = 96, num_key_heads = 2, num_heads = 4, key_dim = 16, val_dim = 16 },
+]
+
+[[launcher]]
+name = "fused_swiglu_gemv"
+cpp = "LaunchFusedSwiGLUGEMV"
+returns = "void"
+doc = "`out = silu(gate_w x) * (up_w x)` for one row."
+params = [
+  { name = "gate_w", kind = "quant", rows = "intermediate_size", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "gate_type", kind = "format", of = "gate_w" },
+  { name = "up_w", kind = "quant", rows = "intermediate_size", cols = "hidden_size", formats = ["BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "Q8_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "up_type", kind = "format", of = "up_w" },
+  { name = "x", kind = "in", elem = "f32", len = "hidden_size" },
+  { name = "out", kind = "out", elem = "f32", len = "intermediate_size" },
+  { name = "intermediate_size", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+]
+probes = [
+  { gate_w = "IQ4_XS", up_w = "Q5_K", intermediate_size = 17408, hidden_size = 5120 },
+  { gate_w = "Q3_K", up_w = "Q3_K", intermediate_size = 3, hidden_size = 256 },
+  { gate_w = "BF16", up_w = "BF16", intermediate_size = 3584, hidden_size = 1024 },
+]
+
+[[launcher]]
+name = "prepare_batched_argmax"
+cpp = "PrepareBatchedGPUArgmaxFlat"
+returns = "supported"
+doc = "Loads the batched argmax kernels without launching them, before the first greedy verification would."
+params = []
+probes = [{}]
+
+[[launcher]]
+name = "batched_argmax"
+cpp = "LaunchBatchedGPUArgmaxFlat"
+returns = "void"
+doc = "Greedy token of each logits row; tiles the vocabulary when the scratch holds 2 floats per 4096-token tile and row."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "batch_size * vocab_size" },
+  { name = "out_tokens", kind = "out", elem = "u32", len = "batch_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "vocab_size", kind = "scalar", type = "usize" },
+  { name = "scratch", kind = "inout", elem = "f32", len = "scratch_len" },
+  { name = "scratch_len", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch_size = 1, vocab_size = 248320, scratch_len = 5120 },
+  { batch_size = 2, vocab_size = 100, scratch_len = 0 },
+]
+
+# --- Prefill (batch of prompt rows) --------------------------------------------
+
+[[launcher]]
+name = "batched_ssm_conv_recurrence_row_split"
+cpp = "LaunchBatchedSSMConvRecurrenceRowSplitFlat"
+returns = "void"
+doc = "Causal conv and gated DeltaNet recurrence of `batch_size` rows for layer `layer_idx` with the row-split kernels (128 x 128 state per head, FP32 state); the post-norm/gate epilogue writes the tiled Q8_1 activation, FP16 values, or `out_buf` in place."
+requires = [
+  "key_dim == 128",
+  "val_dim == 128",
+  "batch_size > 0",
+  "num_key_heads > 0",
+  "num_heads > 0",
+  "qkv_size % 4 == 0",
+  # The last row's q, k and v lie inside its qkv row.
+  "2 * num_key_heads * key_dim + num_heads * val_dim <= qkv_size",
+]
+params = [
+  { name = "qkv_in", kind = "in", elem = "f32", len = "batch_size * qkv_size" },
+  { name = "conv_weights", kind = "in", elem = "f32", len = "qkv_size * 4" },
+  # [layer][qkv_size][4]
+  { name = "conv_state", kind = "inout", elem = "f32", len = "(layer_idx + 1) * qkv_size * 4" },
+  # The state the pass reads when it forks into `conv_state` (QwenRecurrentStateIo).
+  { name = "conv_in", kind = "in", elem = "f32", optional = true, len = "(layer_idx + 1) * qkv_size * 4" },
+  { name = "conv_out", kind = "out", elem = "f32", len = "batch_size * qkv_size" },
+  # FP32 [layer][heads][val_dim][key_dim], passed as bytes (`void*`).
+  { name = "deltanet_state", kind = "inout", elem = "bytes", len = "(layer_idx + 1) * num_heads * key_dim * val_dim * 4" },
+  { name = "deltanet_in", kind = "in", elem = "bytes", optional = true, len = "(layer_idx + 1) * num_heads * key_dim * val_dim * 4" },
+  { name = "alpha_buf", kind = "in", elem = "f32", len = "batch_size * num_heads" },
+  { name = "beta_buf", kind = "in", elem = "f32", len = "batch_size * num_heads" },
+  { name = "ssm_a", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_dt", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_norm", kind = "in", elem = "f32", len = "val_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * val_dim" },
+  { name = "out_buf", kind = "out", elem = "f32", len = "batch_size * num_heads * val_dim" },
+  # Tiled Q8_1 activation of the gated output (ignored when fp16_out is set).
+  { name = "q8_out", kind = "out", elem = "bytes", optional = true, len = "((batch_size + 15) / 16) * (num_heads * val_dim / 32) * 640" },
+  { name = "kq_scales", kind = "out", elem = "f32", len = "batch_size * num_key_heads * 3" },
+  { name = "alpha_beta", kind = "out", elem = "f32", len = "batch_size * num_heads * 2" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "qkv_size", kind = "scalar", type = "usize" },
+  { name = "num_key_heads", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "key_dim", kind = "scalar", type = "u32" },
+  { name = "val_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  { name = "state_storage", kind = "const", cpp_type = "gufo::hip::QwenRecurrentStateStorage", value = "gufo::hip::QwenRecurrentStateStorage::kFp32" },
+  # IEEE half gated output for the FP16 prefill.
+  { name = "fp16_out", kind = "out", elem = "f16", optional = true, len = "batch_size * num_heads * val_dim" },
+]
+probes = [
+  { layer_idx = 1, batch_size = 20, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, with = ["q8_out"] },
+  { layer_idx = 0, batch_size = 2049, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, with = ["fp16_out"] },
+  { layer_idx = 0, batch_size = 3, qkv_size = 1024, num_key_heads = 2, num_heads = 4, key_dim = 128, val_dim = 128 },
+]
+
+[[launcher]]
+name = "batched_embedding_lookup"
+cpp = "LaunchBatchedEmbeddingLookup"
+returns = "void"
+doc = "Embedding rows of `batch_size` tokens, decoded to f32 `[batch][hidden]`."
+params = [
+  { name = "table", kind = "quant", rows = "rows", cols = "hidden_size", formats = ["F32", "BF16", "Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "table_type", kind = "format", of = "table" },
+  { name = "token_ids", kind = "indices", len = "batch_size", below = "rows" },
+  { name = "out_hidden", kind = "out", elem = "f32", len = "batch_size * hidden_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { table = "Q4_K", batch_size = 20, hidden_size = 5120, rows = 7 },
+  { table = "IQ4_XS", batch_size = 1, hidden_size = 256, rows = 1 },
+]
+
+[[launcher]]
+name = "batched_unpack_qg"
+cpp = "LaunchBatchedUnpackQG"
+returns = "void"
+doc = "Splits `[batch][heads][Q | gate]` into Q and gate, `[batch][heads * head_dim]` each."
+params = [
+  { name = "qg_interleaved", kind = "in", elem = "f32", len = "2 * batch_size * num_heads * head_dim" },
+  { name = "q_out", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "gate_out", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+]
+probes = [
+  { batch_size = 20, num_heads = 24, head_dim = 256 },
+  { batch_size = 3, num_heads = 1, head_dim = 5 },
+]
+
+[[launcher]]
+name = "batched_fused_qk_norm_rope_kv_write"
+cpp = "LaunchBatchedFusedQKNormRoPEKvWrite"
+returns = "void"
+doc = "Per-head Q/K RMSNorm and RoPE in place for `batch_size` rows at positions `start_pos..`, and their K/V rows into the FP16 cache."
+requires = [
+  "head_dim <= 256",
+  "rotary_dim <= head_dim",
+  "rotary_dim % 2 == 0",
+  "batch_size > 0",
+  "start_pos + batch_size <= max_context",
+]
+params = [
+  { name = "q_in", kind = "alias", of = "q", elem = "f32", read_only = true },
+  { name = "k_in", kind = "alias", of = "k", elem = "f32", read_only = true },
+  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "q_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "q", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k", kind = "inout", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  # [layer][max_context][kv heads * head_dim]; rows start_pos.. of layer_idx.
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rotary_dim", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "rope", kind = "table", elem = "i32", width = 3, cpp_type = "const gufo::models::qwen::vision::DeviceRope*", optional = true },
+]
+probes = [
+  { layer_idx = 2, start_pos = 5, batch_size = 20, max_context = 32, num_heads = 24, num_kv_heads = 4, head_dim = 256, rotary_dim = 64, rope_theta = 1e7, eps = 1e-6 },
+  { layer_idx = 0, start_pos = 0, batch_size = 3, max_context = 3, num_heads = 2, num_kv_heads = 1, head_dim = 16, rotary_dim = 16, rope_theta = 1e4, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "wmma_attention"
+cpp = "LaunchQwenWmmaAttentionFlat"
+returns = "supported"
+doc = "Causal attention with gate of `batch_size` rows over FP16 cache rows `0..start_pos + batch_size` with WMMA; declines shapes other than 24/4 heads of 256. From 1024 rows it packs KV heads into the workspaces, as many as fit. Output rows before `first_query` are skipped and left untouched; the others keep the full call's arithmetic."
+requires = ["start_pos + batch_size <= max_context", "first_query < batch_size", "first_query % 32 == 0"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  # Read only by the KV write, which the fused QK-norm kernel already did.
+  { name = "k", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k_cache_f16", kind = "in", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "in", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "packed_k", kind = "inout", elem = "f32", len = "packed_k_len" },
+  { name = "packed_k_len", kind = "scalar", type = "usize" },
+  { name = "packed_v", kind = "inout", elem = "f32", len = "packed_v_len" },
+  { name = "packed_v_len", kind = "scalar", type = "usize" },
+  # A multiple of 32 below batch_size: the first query row computed.
+  { name = "first_query", kind = "scalar", type = "usize" },
+]
+probes = [
+  { layer_idx = 1, start_pos = 7, batch_size = 20, max_context = 64, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 0, packed_v_len = 0, first_query = 0 },
+  { layer_idx = 0, start_pos = 0, batch_size = 1100, max_context = 1100, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 600000, packed_v_len = 600000, first_query = 0 },
+  { layer_idx = 0, start_pos = 30, batch_size = 1030, max_context = 1100, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 140000, packed_v_len = 140000, first_query = 0 },
+  { layer_idx = 0, start_pos = 0, batch_size = 1100, max_context = 1100, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 600000, packed_v_len = 600000, first_query = 1024 },
+  { layer_idx = 1, start_pos = 7, batch_size = 70, max_context = 128, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 0, packed_v_len = 0, first_query = 64 },
+]
+
+[[launcher]]
+name = "batched_residual_add"
+cpp = "LaunchBatchedResidualAdd"
+returns = "void"
+doc = "`hidden += update` over `[batch][dim]`."
+params = [
+  { name = "a", kind = "alias", of = "hidden", elem = "f32", read_only = true },
+  { name = "update", kind = "in", elem = "f32", len = "batch_size * dim" },
+  { name = "hidden", kind = "inout", elem = "f32", len = "batch_size * dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch_size = 20, dim = 5120 },
+  { batch_size = 3, dim = 7 },
+]
+
+[[launcher]]
+name = "argmax"
+cpp = "LaunchGPUArgmax"
+returns = "void"
+doc = "Greedy token of one logits row (the lowest index of the largest finite value; u32::MAX when none is finite)."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "vocab_size" },
+  { name = "out_token", kind = "out", elem = "u32", len = "1" },
+  { name = "vocab_size", kind = "scalar", type = "usize" },
+]
+probes = [
+  { vocab_size = 248320 },
+  { vocab_size = 3 },
+]
+
+# Tiled Q8_1 activations: ceil(batch / 16) * (k / 32) * 640 bytes are written
+# (payload, scales and the token-sum sidecar). The Q8_0 WMMA GEMM reads whole
+# macro-tiles of up to 128 tokens, so its inputs declare that envelope.
+
+[[launcher]]
+name = "batched_rms_norm_quantize_q8_1"
+cpp = "LaunchBatchedFusedRMSNormQuantizeQ8_1"
+returns = "void"
+doc = "RMSNorm of `batch_size` rows straight into the tiled Q8_1 activation."
+requires = ["dim % 32 == 0", "dim * 4 <= 32768"]
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "batch_size * dim" },
+  { name = "residual", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "sum_out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch_size + 15) / 16) * (dim / 32) * 640" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 20, dim = 5120, eps = 1e-6 },
+  { batch_size = 16, dim = 32, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "batched_residual_rms_norm_quantize_q8_1"
+cpp = "LaunchBatchedFusedRMSNormQuantizeQ8_1"
+returns = "void"
+doc = "`hidden += update`, then RMSNorm of the sums straight into the tiled Q8_1 activation."
+requires = ["dim % 32 == 0", "dim * 4 <= 32768"]
+params = [
+  { name = "x", kind = "alias", of = "hidden", elem = "f32", read_only = true },
+  { name = "update", kind = "in", elem = "f32", len = "batch_size * dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "hidden", kind = "inout", elem = "f32", len = "batch_size * dim" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch_size + 15) / 16) * (dim / 32) * 640" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 20, dim = 5120, eps = 1e-6 },
+  { batch_size = 1, dim = 64, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "quantize_q8_1_from_f32"
+cpp = "LaunchQuantizeActivationQ8_1FromFp32"
+returns = "void"
+doc = "Tiled Q8_1 activation of `[batch][k]` f32 values."
+requires = ["k % 32 == 0"]
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch + 15) / 16) * (k / 32) * 640" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch = 20, k = 6144 },
+  { batch = 17, k = 32 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_q8_1"
+cpp = "LaunchBatchedQuantGEMMPreQuantized"
+returns = "void"
+doc = "`y[batch][m] = x[batch][k] w[m][k]^T` with WMMA on packed weights and the tiled Q8_1 activation."
+requires = ["m < 2147483648", "k < 2147483648"]
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "q8_x", kind = "in", elem = "bytes", len = "((batch + 127) / 128) * 8 * (k / 32) * 640" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { w = "Q8_0", batch = 5, m = 768, k = 256 },
+  { w = "Q8_0", batch = 20, m = 48, k = 5120 },
+  { w = "Q8_0", batch = 100, m = 48, k = 5120 },
+  { w = "Q8_0", batch = 100, m = 1024, k = 1024 },
+  { w = "Q4_K", batch = 3, m = 17408, k = 5120 },
+  { w = "Q5_K", batch = 20, m = 1030, k = 512 },
+  { w = "Q6_K", batch = 130, m = 1024, k = 1024 },
+  { w = "IQ4_XS", batch = 97, m = 1024, k = 2048 },
+  { w = "IQ4_XS", batch = 97, m = 4096, k = 1024 },
+  { w = "IQ4_NL", batch = 9, m = 70, k = 256 },
+  { w = "Q3_K", batch = 200, m = 300, k = 256 },
+  { w = "IQ3_S", batch = 64, m = 129, k = 512 },
+]
+
+[[launcher]]
+name = "batched_swiglu_quantize_q8_1"
+cpp = "LaunchBatchedFusedSwiGLUQuantizeQ8_1"
+returns = "void"
+doc = "Tiled Q8_1 activation of `silu(gate) * up` over `[batch][k]`."
+requires = ["k % 32 == 0"]
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "up", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch + 15) / 16) * (k / 32) * 640" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch = 20, k = 17408 },
+  { batch = 1, k = 32 },
+]
+
+# FP16 prefill (1024 rows and more of the 27B shape).
+
+[[launcher]]
+name = "batched_rms_norm_fp16"
+cpp = "LaunchBatchedRMSNormFp16"
+returns = "void"
+doc = "RMSNorm of `batch` rows to FP16."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "batch * dim" },
+  { name = "residual", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "sum_out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "output", kind = "out", elem = "f16", len = "batch * dim" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch = 1100, dim = 5120, eps = 1e-6 },
+  { batch = 3, dim = 7, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_fp16"
+cpp = "LaunchBatchedQuantGEMMFp16"
+returns = "void"
+doc = "`output[batch][m] = input[batch][k] w[m][k]^T` with FP16 activations."
+requires = ["k % 256 == 0", "m < 2147483648", "batch < 2147483648"]
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "input", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "output", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { w = "Q4_K", batch = 1024, m = 12288, k = 5120 },
+  { w = "Q5_K", batch = 1100, m = 1024, k = 5120 },
+  { w = "Q8_0", batch = 1030, m = 48, k = 5120 },
+  { w = "IQ3_S", batch = 1030, m = 300, k = 512 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_residual_fp16"
+cpp = "LaunchBatchedQuantGEMMResidualFp16"
+returns = "void"
+doc = "`residual[batch][m] += input[batch][k] w[m][k]^T` with FP16 activations."
+requires = ["k % 256 == 0", "m < 2147483648", "batch < 2147483648"]
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "input", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "residual", kind = "inout", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { w = "Q6_K", batch = 1024, m = 5120, k = 6144 },
+  { w = "IQ4_XS", batch = 1030, m = 700, k = 256 },
+]
+
+[[launcher]]
+name = "float_to_fp16"
+cpp = "LaunchFloatToFp16"
+returns = "void"
+doc = "FP16 copy of `elements` f32 values."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "elements" },
+  { name = "output", kind = "out", elem = "f16", len = "elements" },
+  { name = "elements", kind = "scalar", type = "usize" },
+]
+probes = [{ elements = 1030 }, { elements = 1 }]
+
+[[launcher]]
+name = "dual_quant_gemm_swiglu_fp16"
+cpp = "TryLaunchBatchedDualQuantGEMMSwiGLUFp16"
+returns = "supported"
+doc = "`output = silu(input gate_w^T) * (input up_w^T)` in FP16 for the gate/up format pairs it has kernels for."
+requires = ["k % 256 == 0", "m < 2147483648", "batch < 2147483648"]
+params = [
+  { name = "gate_type", kind = "format", of = "gate_w" },
+  { name = "up_type", kind = "format", of = "up_w" },
+  { name = "gate_w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "up_w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "input", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "output", kind = "out", elem = "f16", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { gate_w = "Q4_K", up_w = "Q5_K", batch = 1024, m = 17408, k = 5120 },
+  { gate_w = "IQ4_XS", up_w = "IQ4_XS", batch = 1030, m = 300, k = 256 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_swiglu_fp16"
+cpp = "LaunchBatchedQuantGEMMSwiGLUFp16"
+returns = "void"
+doc = "`output = silu(gate) * (input w^T)` in FP16, gate in f32."
+requires = ["k % 256 == 0", "m < 2147483648", "batch < 2147483648"]
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "input", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch * m" },
+  { name = "output", kind = "out", elem = "f16", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { w = "Q3_K", batch = 1024, m = 17408, k = 5120 },
+  { w = "IQ3_S", batch = 1030, m = 300, k = 256 },
+]
+
+# --- Speculative verification (decode-equivalent rows of one sequence) -------
+
+[[launcher]]
+name = "batched_rms_norm"
+cpp = "LaunchBatchedRMSNorm"
+returns = "void"
+doc = "RMSNorm of `batch_size` rows."
+requires = ["batch_size > 0"]
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "batch_size * dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "out", kind = "out", elem = "f32", len = "batch_size * dim" },
+  { name = "out_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [
+  { batch_size = 8, dim = 5120, eps = 1e-6 },
+  { batch_size = 65, dim = 5120, eps = 1e-6 },
+  { batch_size = 3, dim = 7, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_f32"
+cpp = "LaunchBatchedQuantGEMMFp32"
+returns = "void"
+doc = "`y[batch][m] = x[batch][k] w[m][k]^T` with FP32 activations and the decode GEMV's per-output arithmetic, sharing weight loads across up to 8 rows; wider batches (cross-request verification, up to 64 rows) run in exact row groups."
+requires = ["batch <= 64"]
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q3_K", "Q4_K", "Q5_K", "Q6_K", "IQ4_NL", "IQ4_XS", "IQ3_S"] },
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { w = "Q8_0", batch = 1, m = 96, k = 5120 },
+  { w = "Q8_0", batch = 6, m = 5120, k = 17408 },
+  { w = "Q8_0", batch = 8, m = 5120, k = 17408 },
+  { w = "Q8_0", batch = 3, m = 70, k = 256 },
+  { w = "Q4_K", batch = 8, m = 1280, k = 5120 },
+  { w = "Q4_K", batch = 5, m = 34816, k = 5120 },
+  { w = "Q6_K", batch = 6, m = 5120, k = 17408 },
+  { w = "Q6_K", batch = 8, m = 248320, k = 5120 },
+  { w = "Q5_K", batch = 4, m = 12288, k = 5120 },
+  { w = "IQ4_XS", batch = 7, m = 300, k = 512 },
+  { w = "IQ4_NL", batch = 2, m = 33, k = 64 },
+  { w = "Q3_K", batch = 8, m = 17408, k = 5120 },
+  { w = "IQ3_S", batch = 1, m = 10, k = 256 },
+  { w = "Q8_0", batch = 16, m = 5120, k = 17408 },
+  { w = "Q8_0", batch = 24, m = 34816, k = 5120 },
+  { w = "Q8_0", batch = 64, m = 10240, k = 5120 },
+  { w = "Q4_K", batch = 14, m = 34816, k = 5120 },
+  { w = "Q4_K", batch = 23, m = 17408, k = 5120 },
+  { w = "Q5_K", batch = 28, m = 5120, k = 6144 },
+  { w = "Q6_K", batch = 42, m = 5120, k = 17408 },
+  { w = "Q6_K", batch = 64, m = 248320, k = 5120 },
+  { w = "IQ4_XS", batch = 56, m = 34816, k = 5120 },
+  { w = "Q3_K", batch = 9, m = 300, k = 512 },
+]
+
+[[launcher]]
+name = "packed_swiglu"
+cpp = "LaunchPackedSwiGLUActivation"
+returns = "void"
+doc = "`silu(gate) * up` from packed `[batch][gate | up]` rows."
+params = [
+  { name = "gate_up", kind = "in", elem = "f32", len = "2 * batch_size * intermediate_size" },
+  { name = "out", kind = "out", elem = "f32", len = "batch_size * intermediate_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "intermediate_size", kind = "scalar", type = "usize" },
+]
+probes = [{ batch_size = 8, intermediate_size = 17408 }, { batch_size = 2, intermediate_size = 3 }]
+
+[[launcher]]
+name = "batched_swiglu"
+cpp = "LaunchBatchedSwiGLUActivation"
+returns = "void"
+doc = "`silu(gate) * up` element-wise."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "num_elements" },
+  { name = "up", kind = "in", elem = "f32", len = "num_elements" },
+  { name = "out", kind = "out", elem = "f32", len = "num_elements" },
+  { name = "out_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "num_elements", kind = "scalar", type = "usize" },
+]
+probes = [{ num_elements = 17408 }, { num_elements = 5 }]
+
+[[launcher]]
+name = "ssm_conv_recurrence_rows"
+cpp = "LaunchSSMConvRecurrenceRowsFlat"
+returns = "void"
+doc = "Causal conv and DeltaNet recurrence of `rows` consecutive tokens of one sequence for layer `layer_idx` (FP32 state, 128 x 128 per head); gated output when `out_buf` is given, and replay capture at slot `position % 16` when enabled."
+requires = [
+  "key_dim == 128",
+  "val_dim == 128",
+  "rows > 0",
+  "num_key_heads > 0",
+  "num_heads > 0",
+  "2 * num_key_heads * key_dim + num_heads * val_dim <= qkv_size",
+]
+params = [
+  { name = "qkv_in", kind = "in", elem = "f32", len = "rows * qkv_size" },
+  { name = "conv_weights", kind = "in", elem = "f32", len = "qkv_size * 4" },
+  # [layer][qkv_size][4]
+  { name = "conv_state", kind = "inout", elem = "f32", len = "(layer_idx + 1) * qkv_size * 4" },
+  # The state the pass reads when it forks into `conv_state` (QwenRecurrentStateIo).
+  { name = "conv_in", kind = "in", elem = "f32", optional = true, len = "(layer_idx + 1) * qkv_size * 4" },
+  { name = "conv_out", kind = "out", elem = "f32", len = "rows * qkv_size" },
+  # [layer][heads][val_dim][key_dim]
+  { name = "deltanet_state", kind = "inout", elem = "f32", len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  { name = "deltanet_in", kind = "in", elem = "f32", optional = true, len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  { name = "alpha_buf", kind = "in", elem = "f32", len = "(rows - 1) * projection_row_stride + num_heads" },
+  { name = "beta_buf", kind = "in", elem = "f32", len = "(rows - 1) * projection_row_stride + num_heads" },
+  { name = "ssm_a", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_dt", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_norm", kind = "in", elem = "f32", optional = true, len = "val_dim" },
+  { name = "gate", kind = "in", elem = "f32", optional = true, len = "(rows - 1) * inner_row_stride + num_heads * val_dim" },
+  { name = "out_buf", kind = "out", elem = "f32", optional = true, len = "(rows - 1) * inner_row_stride + num_heads * val_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "qkv_size", kind = "scalar", type = "usize" },
+  { name = "num_key_heads", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "key_dim", kind = "scalar", type = "u32" },
+  { name = "val_dim", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "projection_row_stride", kind = "scalar", type = "usize" },
+  { name = "inner_row_stride", kind = "scalar", type = "usize" },
+  # Replay rings [layer][16][width].
+  { name = "replay_qkv", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * qkv_size" },
+  { name = "replay_alpha", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_beta", kind = "inout", elem = "f32", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_position", kind = "in", elem = "u32", optional = true, len = "rows" },
+  { name = "replay_enabled", kind = "in", elem = "u32", optional = true, len = "1" },
+]
+probes = [
+  { layer_idx = 2, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, rows = 8, projection_row_stride = 96, inner_row_stride = 6144, replay_position = 15, replay_enabled = 1, with = ["ssm_norm", "gate", "out_buf", "replay_qkv", "replay_alpha", "replay_beta", "replay_position", "replay_enabled"] },
+  { layer_idx = 1, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, rows = 5, projection_row_stride = 48, inner_row_stride = 6144 },
+  { layer_idx = 0, qkv_size = 1024, num_key_heads = 2, num_heads = 4, key_dim = 128, val_dim = 128, rows = 1, projection_row_stride = 4, inner_row_stride = 512, with = ["ssm_norm", "gate", "out_buf"] },
+]
+
+[[launcher]]
+name = "ssm_conv_recurrence_sequences"
+cpp = "LaunchSSMConvRecurrenceSequencesFlat"
+returns = "void"
+doc = "Causal conv and DeltaNet recurrence for layer `layer_idx` of `count` sequences in one launch pair (`LaunchSSMConvRecurrenceBatch`): sequence `i` runs rows `row_offset[i]..+rows[i]` of the shared inputs on its own FP32 state (128 x 128 per head), with gated output when `out_buf` is given and its replay capture when enabled."
+requires = [
+  "key_dim == 128",
+  "val_dim == 128",
+  "count > 1",
+  "count <= 8",
+  "total_rows > 0",
+  "num_key_heads > 0",
+  "num_heads > 0",
+  "2 * num_key_heads * key_dim + num_heads * val_dim <= qkv_size",
+  "rows > 0",
+  "row_offset + rows <= total_rows",
+]
+params = [
+  { name = "qkv_in", kind = "in", elem = "f32", len = "total_rows * qkv_size" },
+  { name = "conv_weights", kind = "in", elem = "f32", len = "qkv_size * 4" },
+  { name = "conv_out", kind = "out", elem = "f32", len = "total_rows * qkv_size" },
+  { name = "alpha_buf", kind = "in", elem = "f32", len = "(total_rows - 1) * projection_row_stride + num_heads" },
+  { name = "beta_buf", kind = "in", elem = "f32", len = "(total_rows - 1) * projection_row_stride + num_heads" },
+  { name = "ssm_a", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_dt", kind = "in", elem = "f32", len = "num_heads" },
+  { name = "ssm_norm", kind = "in", elem = "f32", optional = true, len = "val_dim" },
+  { name = "gate", kind = "in", elem = "f32", optional = true, len = "(total_rows - 1) * inner_row_stride + num_heads * val_dim" },
+  { name = "out_buf", kind = "out", elem = "f32", optional = true, len = "(total_rows - 1) * inner_row_stride + num_heads * val_dim" },
+  # Per sequence: [layer][qkv_size][4] and [layer][heads][val_dim][key_dim].
+  { name = "conv_state", kind = "inout", elem = "f32", list = "count", len = "(layer_idx + 1) * qkv_size * 4" },
+  # The states the pass reads when a sequence forks (QwenRecurrentStateIo).
+  { name = "conv_in", kind = "in", elem = "f32", list = "count", optional = true, len = "(layer_idx + 1) * qkv_size * 4" },
+  { name = "deltanet_state", kind = "inout", elem = "f32", list = "count", len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  { name = "deltanet_in", kind = "in", elem = "f32", list = "count", optional = true, len = "(layer_idx + 1) * num_heads * key_dim * val_dim" },
+  # Per sequence replay rings [layer][16][width], its rows' positions and flag.
+  { name = "replay_qkv", kind = "inout", elem = "f32", list = "count", optional = true, len = "(layer_idx + 1) * 16 * qkv_size" },
+  { name = "replay_alpha", kind = "inout", elem = "f32", list = "count", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_beta", kind = "inout", elem = "f32", list = "count", optional = true, len = "(layer_idx + 1) * 16 * num_heads" },
+  { name = "replay_position", kind = "in", elem = "u32", list = "count", optional = true, len = "rows" },
+  { name = "replay_enabled", kind = "in", elem = "u32", list = "count", optional = true, len = "1" },
+  { name = "row_offset", kind = "scalar", type = "u32", list = "count" },
+  { name = "rows", kind = "scalar", type = "u32", list = "count" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "total_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "qkv_size", kind = "scalar", type = "usize" },
+  { name = "num_key_heads", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "key_dim", kind = "scalar", type = "u32" },
+  { name = "val_dim", kind = "scalar", type = "u32" },
+  { name = "projection_row_stride", kind = "scalar", type = "usize" },
+  { name = "inner_row_stride", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 4, total_rows = 4, row_offset = [0, 1, 2, 3], rows = 1, layer_idx = 2, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, projection_row_stride = 96, inner_row_stride = 6144, replay_position = 15, replay_enabled = 1, with = ["ssm_norm", "gate", "out_buf", "replay_qkv", "replay_alpha", "replay_beta", "replay_position", "replay_enabled"] },
+  { count = 3, total_rows = 15, row_offset = [0, 8, 11], rows = [8, 3, 4], layer_idx = 1, qkv_size = 10240, num_key_heads = 16, num_heads = 48, key_dim = 128, val_dim = 128, projection_row_stride = 48, inner_row_stride = 6144, replay_position = 7, replay_enabled = 1, with = ["ssm_norm", "gate", "out_buf", "replay_qkv", "replay_alpha", "replay_beta", "replay_position", "replay_enabled"] },
+  { count = 2, total_rows = 2, row_offset = [0, 1], rows = 1, layer_idx = 0, qkv_size = 1024, num_key_heads = 2, num_heads = 4, key_dim = 128, val_dim = 128, projection_row_stride = 4, inner_row_stride = 512 },
+]
+
+[[launcher]]
+name = "causal_decode_attention"
+cpp = "LaunchCausalDecodeAttentionFlat"
+returns = "void"
+doc = "Decode attention of `batch_size` consecutive rows at `start_pos..`, each over its causal prefix of the FP16 cache (already written), with the scalar decode arithmetic; split-K uses the scratch when it holds the rows."
+requires = ["batch_size > 0", "start_pos + batch_size <= max_context"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k_cache_f16", kind = "in", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "in", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "scratch", kind = "inout", elem = "f32", len = "scratch_len" },
+  { name = "scratch_len", kind = "scalar", type = "usize" },
+]
+probes = [
+  { layer_idx = 1, start_pos = 600, batch_size = 8, max_context = 1024, num_heads = 24, num_kv_heads = 4, head_dim = 256, scratch_len = 1585152 },
+  { layer_idx = 1, start_pos = 200, batch_size = 5, max_context = 256, num_heads = 24, num_kv_heads = 4, head_dim = 256, scratch_len = 198144 },
+  { layer_idx = 0, start_pos = 20, batch_size = 7, max_context = 64, num_heads = 24, num_kv_heads = 4, head_dim = 256, scratch_len = 0 },
+  { layer_idx = 0, start_pos = 124, batch_size = 7, max_context = 256, num_heads = 24, num_kv_heads = 4, head_dim = 256, scratch_len = 198144 },
+  { layer_idx = 0, start_pos = 0, batch_size = 1, max_context = 8, num_heads = 24, num_kv_heads = 4, head_dim = 256, scratch_len = 0 },
+]
+
+# --- DFlash2 draft model -------------------------------------------------------
+
+[[launcher]]
+name = "dflash_grouped_dynamic_conv"
+cpp = "kernels::LaunchDFlashGroupedDynamicConv"
+returns = "void"
+doc = "Causal grouped convolution over the block's tokens with per-token dynamic coefficients added to the base kernel (`side` 0 before, 1 after the mixer)."
+requires = ["side <= 1", "group_size > 0", "hidden_size % group_size == 0", "num_tokens > 0"]
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "num_tokens * hidden_size" },
+  # [token][2][kernel][hidden / group]
+  { name = "dynamic_coefficients", kind = "in", elem = "f32", len = "num_tokens * 2 * kernel_size * (hidden_size / group_size)" },
+  # [2][kernel][hidden]
+  { name = "base_kernel", kind = "in", elem = "f32", len = "2 * kernel_size * hidden_size" },
+  { name = "output", kind = "out", elem = "f32", len = "num_tokens * hidden_size" },
+  { name = "num_tokens", kind = "scalar", type = "u32" },
+  { name = "hidden_size", kind = "scalar", type = "u32" },
+  { name = "kernel_size", kind = "scalar", type = "u32" },
+  { name = "group_size", kind = "scalar", type = "u32" },
+  { name = "side", kind = "scalar", type = "u32" },
+]
+probes = [
+  { num_tokens = 8, hidden_size = 5120, kernel_size = 2, group_size = 16, side = 1 },
+  { num_tokens = 1, hidden_size = 32, kernel_size = 3, group_size = 4, side = 0 },
+]
+
+[[launcher]]
+name = "dflash_silu_mul"
+cpp = "kernels::LaunchDFlashSiLUMul"
+returns = "void"
+doc = "`gate = silu(gate) * up` in place."
+requires = ["total_elements > 0"]
+params = [
+  { name = "gate", kind = "inout", elem = "f32", len = "total_elements" },
+  { name = "up", kind = "in", elem = "f32", len = "total_elements" },
+  { name = "total_elements", kind = "scalar", type = "u32" },
+]
+probes = [{ total_elements = 139264 }, { total_elements = 3 }]
+
+[[launcher]]
+name = "dflash_noncausal_attention"
+cpp = "kernels::LaunchDFlashNonCausalAttention"
+returns = "void"
+doc = "Attention of the block's queries over the injected history ring (positions within the sliding window before `current_pos`, slot `position % history_capacity`) and, non-causally, the whole block."
+requires = [
+  "num_kv_heads > 0",
+  "num_q_heads % num_kv_heads == 0",
+  "history_capacity > 0",
+  "block_count > 0",
+  "head_dim % 4 == 0",
+  # The kernel keeps a score per visible key in 64 KiB of LDS.
+  "sliding_window + block_count <= 15000",
+]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "block_count * num_q_heads * head_dim" },
+  { name = "injected_k", kind = "in", elem = "f32", len = "history_capacity * num_kv_heads * head_dim" },
+  { name = "injected_v", kind = "in", elem = "f32", len = "history_capacity * num_kv_heads * head_dim" },
+  { name = "block_k", kind = "in", elem = "f32", len = "block_count * num_kv_heads * head_dim" },
+  { name = "block_v", kind = "in", elem = "f32", len = "block_count * num_kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "block_count * num_q_heads * head_dim" },
+  { name = "current_pos", kind = "scalar", type = "u32" },
+  { name = "history_length", kind = "scalar", type = "u32" },
+  { name = "block_count", kind = "scalar", type = "u32" },
+  { name = "sliding_window", kind = "scalar", type = "u32" },
+  { name = "num_q_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "history_capacity", kind = "scalar", type = "u32" },
+]
+probes = [
+  { current_pos = 3000, history_length = 3000, block_count = 8, sliding_window = 2048, num_q_heads = 32, num_kv_heads = 8, head_dim = 128, scale = 0.0884, history_capacity = 2048 },
+  { current_pos = 20, history_length = 20, block_count = 3, sliding_window = 2048, num_q_heads = 32, num_kv_heads = 8, head_dim = 128, scale = 0.0884, history_capacity = 2048 },
+  { current_pos = 0, history_length = 0, block_count = 2, sliding_window = 8, num_q_heads = 2, num_kv_heads = 1, head_dim = 4, scale = 0.5, history_capacity = 8 },
+]
+
+[[launcher]]
+name = "dflash_selector"
+cpp = "LaunchDFlashSelectorFlat"
+returns = "void"
+doc = "Greedy DFlash2 token path of `count` proposal rows: per row the top-k draft logits rescored with the low-rank predecessor/successor path term, chained from the anchor. Repeat, frequency and presence penalties evolve across the chain."
+requires = ["count > 0", "selector_rank > 0", "selector_top_k > 0", "selector_top_k <= 16", "selector_top_k <= vocab_size"]
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "count * vocab_size" },
+  { name = "projected_hidden", kind = "in", elem = "f32", len = "count * selector_rank" },
+  { name = "predecessor_codebook", kind = "in", elem = "bf16", len = "vocab_size * selector_rank" },
+  { name = "successor_codebook", kind = "in", elem = "bf16", len = "vocab_size * selector_rank" },
+  { name = "anchor", kind = "indices", len = "1", below = "vocab_size" },
+  { name = "tokens", kind = "out", elem = "u32", len = "count + 1" },
+  { name = "confidences", kind = "out", elem = "f32", len = "count" },
+  # [row][ceil(vocab / 2048)][16]
+  { name = "partial_scores", kind = "out", elem = "f32", len = "count * ((vocab_size + 2047) / 2048) * 16" },
+  { name = "partial_ids", kind = "out", elem = "u32", len = "count * ((vocab_size + 2047) / 2048) * 16" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "vocab_size", kind = "scalar", type = "u32" },
+  { name = "selector_rank", kind = "scalar", type = "u32" },
+  { name = "selector_top_k", kind = "scalar", type = "u32" },
+  { name = "repeat_penalty", kind = "scalar", type = "f32" },
+  { name = "frequency_penalty", kind = "scalar", type = "f32" },
+  { name = "presence_penalty", kind = "scalar", type = "f32" },
+  { name = "repeat_last_n", kind = "scalar", type = "u32" },
+  # sampling::TokenPenalty sorted by token, three words each: token,
+  # generated count, repeated (only the counts are read).
+  { name = "penalties", kind = "in", elem = "u32", len = "penalty_count * 3", optional = true },
+  { name = "penalty_count", kind = "scalar", type = "u32" },
+  # The request's repetition window, oldest first.
+  { name = "history", kind = "in", elem = "u32", len = "history_count", optional = true },
+  { name = "history_count", kind = "scalar", type = "u32" },
+]
+probes = [
+  { count = 7, vocab_size = 248320, selector_rank = 256, selector_top_k = 16, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, repeat_last_n = 0, penalty_count = 0, history_count = 0 },
+  { count = 1, vocab_size = 100, selector_rank = 8, selector_top_k = 4, repeat_penalty = 1.0, frequency_penalty = 0.0, presence_penalty = 0.0, repeat_last_n = 0, penalty_count = 0, history_count = 0 },
+  { count = 7, vocab_size = 248320, selector_rank = 256, selector_top_k = 16, repeat_penalty = 0.8, frequency_penalty = -0.2, presence_penalty = 0.5, repeat_last_n = 3, penalty_count = 2, history_count = 3, with = ["penalties", "history"] },
+]
+
+[[launcher]]
+name = "exact_bf16_gemm_f32"
+cpp = "LaunchExactBf16GEMMFp32SmallBatch"
+returns = "void"
+doc = "`y[batch][m] = x[batch][k] a[m][k]^T` over BF16 weights with FP32 activations and the decode GEMV's per-output accumulation order."
+requires = ["k % 8 == 0"]
+params = [
+  { name = "a", kind = "in", elem = "bf16", len = "m * k" },
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch = 8, m = 1024, k = 5120 },
+  { batch = 16, m = 5120, k = 25600 },
+  { batch = 16, m = 1024, k = 5120 },
+  { batch = 5, m = 5120, k = 25600 },
+  { batch = 3, m = 7, k = 16 },
+]
+
+[[launcher]]
+name = "dflash_qk_norm_rope"
+cpp = "LaunchBatchedFusedQKNormRoPEKvWrite"
+returns = "void"
+doc = "Per-head Q/K RMSNorm and RoPE in place for the block rows at `start_pos..`, without a KV cache (DFlash2 block)."
+requires = ["head_dim <= 256", "rotary_dim <= head_dim", "rotary_dim % 2 == 0", "batch_size > 0"]
+params = [
+  { name = "q_in", kind = "alias", of = "q", elem = "f32", read_only = true },
+  { name = "k_in", kind = "alias", of = "k", elem = "f32", read_only = true },
+  # V is read unconditionally; DFlash2 passes K.
+  { name = "v", kind = "alias", of = "k", elem = "f32", read_only = true },
+  { name = "q_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "q", kind = "inout", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k", kind = "inout", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "v_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "layer_idx", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rotary_dim", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "rope", kind = "const", cpp_type = "const gufo::models::qwen::vision::DeviceRope*", value = "nullptr" },
+]
+probes = [
+  { start_pos = 3000, batch_size = 8, num_heads = 32, num_kv_heads = 8, head_dim = 128, rotary_dim = 128, rope_theta = 1e7, eps = 1e-6 },
+  { start_pos = 0, batch_size = 1, num_heads = 2, num_kv_heads = 1, head_dim = 16, rotary_dim = 8, rope_theta = 1e4, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "dflash_k_norm_rope"
+cpp = "LaunchBatchedFusedQKNormRoPEKvWrite"
+returns = "void"
+doc = "Per-head K RMSNorm and RoPE in place for `batch_size` injected rows at `start_pos..` (no queries, no cache)."
+requires = ["head_dim <= 256", "rotary_dim <= head_dim", "rotary_dim % 2 == 0", "batch_size > 0"]
+params = [
+  { name = "q", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "k_in", kind = "alias", of = "k", elem = "f32", read_only = true },
+  { name = "v", kind = "alias", of = "k", elem = "f32", read_only = true },
+  { name = "q_weight", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "k_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "q_out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k", kind = "inout", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "v_cache_f16", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "layer_idx", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "num_heads", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rotary_dim", kind = "scalar", type = "u32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "stream", kind = "stream" },
+  { name = "rope", kind = "const", cpp_type = "const gufo::models::qwen::vision::DeviceRope*", value = "nullptr" },
+]
+probes = [
+  { start_pos = 256, batch_size = 256, num_kv_heads = 8, head_dim = 128, rotary_dim = 128, rope_theta = 1e7, eps = 1e-6 },
+  { start_pos = 0, batch_size = 1, num_kv_heads = 1, head_dim = 16, rotary_dim = 16, rope_theta = 1e4, eps = 1e-6 },
+]
+
+# The Qwen3.8 vision encoder (`src/models/qwen/vision`), shared with
+# Flash-Next. Hidden width 1152, 16 heads of 72, FFN 4304, patches of
+# 3 x 2 x 16 x 16 values, a 48 x 48 position table.
+
+[[launcher]]
+name = "vision_patchify"
+cpp = "::gufo::models::qwen::vision::LaunchPatchify"
+returns = "void"
+doc = "BF16 patches of an RGB8 grid of `width` pixels, ordered by 2x2 merge group; the two temporal frames repeat the image."
+params = [
+  { name = "pixels", kind = "in", elem = "u8", len = "count * 768" },
+  { name = "patches", kind = "out", elem = "bf16", len = "count * 1536" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "grid_width", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["width == grid_width * 16", "grid_width >= 2", "grid_width % 2 == 0", "count >= 4", "count % (2 * grid_width) == 0"]
+probes = [
+  { width = 64, grid_width = 4, count = 16 },
+  { width = 32, grid_width = 2, count = 12 },
+]
+
+[[launcher]]
+name = "vision_patch_position"
+cpp = "::gufo::models::qwen::vision::LaunchPatchPosition"
+returns = "void"
+doc = "hidden += bias, then the 48x48 position table interpolated bilinearly to the patch grid, rounded to BF16 as the reference."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "count * 1152" },
+  { name = "bias", kind = "in", elem = "f32", len = "1152" },
+  { name = "positions", kind = "in", elem = "f32", len = "2304 * 1152" },
+  { name = "grid_height", kind = "scalar", type = "u32" },
+  { name = "grid_width", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["count == grid_height * grid_width", "grid_height >= 2", "grid_width >= 2"]
+probes = [
+  { grid_height = 2, grid_width = 2, count = 4 },
+  { grid_height = 4, grid_width = 6, count = 24 },
+]
+
+[[launcher]]
+name = "vision_layer_norm"
+cpp = "::gufo::models::qwen::vision::LaunchLayerNorm"
+returns = "void"
+doc = "output[r] (BF16) = layernorm(input[r]) * weight + bias with eps 1e-6."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "width >= 1"]
+probes = [
+  { rows = 3, width = 1152 },
+  { rows = 1, width = 4608 },
+]
+
+[[launcher]]
+name = "vision_bias_residual"
+cpp = "::gufo::models::qwen::vision::LaunchBiasResidual"
+returns = "void"
+doc = "hidden = bf16(hidden + bf16(projection + bias)), bias repeating every `width` values."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "size" },
+  { name = "projection", kind = "in", elem = "f32", len = "size" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "size", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["size >= 1", "width >= 1"]
+probes = [
+  { size = 2304, width = 1152 },
+  { size = 7, width = 3 },
+]
+
+[[launcher]]
+name = "vision_activate"
+cpp = "::gufo::models::qwen::vision::LaunchActivate"
+returns = "void"
+doc = "output (BF16) = gelu(bf16(input + bias)), the tanh approximation or the exact erf form."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "size" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "output", kind = "out", elem = "bf16", len = "size" },
+  { name = "size", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "approximate", kind = "scalar", type = "bool" },
+]
+requires = ["size >= 1", "width >= 1"]
+probes = [
+  { size = 8608, width = 4304, approximate = true },
+  { size = 9, width = 4, approximate = false },
+]
+
+[[launcher]]
+name = "vision_qkv_rope"
+cpp = "::gufo::models::qwen::vision::LaunchQkvRope"
+returns = "void"
+doc = "Head-major q, k and v (BF16) from the fused QKV projection plus bias, with 2D rotary positions of the merge-ordered patch grid on q and k."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count * 3456" },
+  { name = "bias", kind = "in", elem = "f32", len = "3456" },
+  { name = "q", kind = "out", elem = "bf16", len = "count * 1152" },
+  { name = "k", kind = "out", elem = "bf16", len = "count * 1152" },
+  { name = "v", kind = "out", elem = "bf16", len = "count * 1152" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "grid_width", kind = "scalar", type = "u32" },
+]
+requires = ["count >= 1", "grid_width >= 2", "grid_width % 2 == 0"]
+probes = [
+  { count = 4, grid_width = 2 },
+  { count = 24, grid_width = 6 },
+]
+
+[[launcher]]
+name = "vision_softmax"
+cpp = "::gufo::models::qwen::vision::LaunchSoftmax"
+returns = "void"
+doc = "probabilities[r] (BF16) = softmax(bf16(bf16(scores[r]) / sqrt(72))) over `length` keys."
+params = [
+  { name = "scores", kind = "in", elem = "f32", len = "rows * length" },
+  { name = "probabilities", kind = "out", elem = "bf16", len = "rows * length" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "length", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "length >= 1"]
+probes = [
+  { rows = 3, length = 1000 },
+  { rows = 2, length = 2048 },
+  { rows = 1, length = 4096 },
+  { rows = 2, length = 8000 },
+  { rows = 1, length = 9000 },
+]
+
+[[launcher]]
+name = "vision_attention_rows"
+cpp = "::gufo::models::qwen::vision::LaunchAttentionRows"
+returns = "void"
+doc = "Rows begin..begin + rows of the token-major attention output (BF16) from a head-major tile of `rows` tokens."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * 1152" },
+  { name = "output", kind = "inout", elem = "bf16", len = "count * 1152" },
+  { name = "begin", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "begin + rows <= count"]
+probes = [
+  { begin = 0, rows = 4, count = 4 },
+  { begin = 128, rows = 3, count = 131 },
+]
+
+[[launcher]]
+name = "vision_finish"
+cpp = "::gufo::models::qwen::vision::LaunchFinish"
+returns = "void"
+doc = "output = bf16(output + bias), bias repeating every `width` values."
+params = [
+  { name = "output", kind = "inout", elem = "f32", len = "size" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "size", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["size >= 1", "width >= 1"]
+probes = [
+  { size = 5120, width = 2560 },
+  { size = 5, width = 2 },
+]
+
+[[launcher]]
+name = "vision_inject_rows"
+cpp = "::gufo::models::qwen::vision::LaunchInjectRows"
+returns = "void"
+doc = "hidden[r][s] = embedding[r] for each of `hc` residual streams: image embeddings replace the token embeddings of their rows."
+params = [
+  { name = "hidden", kind = "out", elem = "f32", len = "rows * width * hc" },
+  { name = "embedding", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "hc", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "width >= 1", "hc >= 1"]
+probes = [
+  { rows = 3, width = 5120, hc = 1 },
+  { rows = 2, width = 2560, hc = 4 },
+]
+
+[[launcher]]
+name = "batched_rms_norm_bf16"
+cpp = "LaunchBatchedRMSNorm"
+returns = "void"
+doc = "RMSNorm of `batch_size` rows into f32 and a BF16 copy (the staging the BF16 Q8_1 quantizer reads)."
+requires = ["batch_size > 0"]
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "batch_size * dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "out", kind = "out", elem = "f32", len = "batch_size * dim" },
+  { name = "out_bf16", kind = "out", elem = "bf16", len = "batch_size * dim" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+probes = [{ batch_size = 3, dim = 1024, eps = 1e-6 }, { batch_size = 2, dim = 5120, eps = 1e-6 }]
+
+[[launcher]]
+name = "quantize_q8_1"
+cpp = "LaunchQuantizeActivationQ8_1"
+returns = "void"
+doc = "Tiled Q8_1 activation of `[batch][k]` BF16 values."
+requires = ["k % 32 == 0"]
+params = [
+  { name = "x", kind = "in", elem = "bf16", len = "batch * k" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch + 15) / 16) * (k / 32) * 640" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+probes = [
+  { batch = 20, k = 2048 },
+  { batch = 1, k = 32 },
+]
+
+[[launcher]]
+name = "batched_swiglu_bf16"
+cpp = "LaunchBatchedSwiGLUActivation"
+returns = "void"
+doc = "`silu(gate) * up` element-wise into f32 and a BF16 copy."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "num_elements" },
+  { name = "up", kind = "in", elem = "f32", len = "num_elements" },
+  { name = "out", kind = "out", elem = "f32", len = "num_elements" },
+  { name = "out_bf16", kind = "out", elem = "bf16", len = "num_elements" },
+  { name = "num_elements", kind = "scalar", type = "usize" },
+]
+probes = [{ num_elements = 3584 }, { num_elements = 5 }]
+
+[[launcher]]
+name = "batched_attention"
+cpp = "LaunchBatchedAttention"
+returns = "void"
+doc = "Causal attention with gate of `batch_size` rows over FP16 cache rows `0..start_pos + batch_size`, one block per query row and head (the C++ prefill fallback for head shapes the WMMA attention declines). The scores of a row live in LDS beside a 1 KiB reduction buffer, so at most 16128 positions are visible in the 64 KiB of a workgroup; `skip_kv_write` when the fused QK-norm kernel wrote this chunk's K and V."
+requires = ["start_pos + batch_size <= max_context", "start_pos + batch_size <= 16128", "num_kv_heads > 0", "num_heads % num_kv_heads == 0"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  { name = "skip_kv_write", kind = "scalar", type = "bool" },
+  { name = "out_context_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
+]
+probes = [
+  { layer_idx = 1, start_pos = 7, batch_size = 20, max_context = 64, num_heads = 8, num_kv_heads = 2, head_dim = 256, skip_kv_write = true },
+  { layer_idx = 0, start_pos = 0, batch_size = 33, max_context = 40, num_heads = 16, num_kv_heads = 4, head_dim = 256, skip_kv_write = false },
+]
+
+[[launcher]]
+name = "batched_attention_long"
+cpp = "LaunchBatchedAttention"
+returns = "void"
+doc = "batched_attention past the 16128 positions a row of scores fits in LDS: 256-element GQA heads with the bounded online decode arithmetic."
+requires = ["start_pos + batch_size <= max_context", "start_pos + batch_size >= 16129", "head_dim == 256", "num_kv_heads > 0", "num_heads % num_kv_heads == 0"]
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
+  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
+  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
+  { name = "layer_idx", kind = "scalar", type = "u32" },
+  { name = "start_pos", kind = "scalar", type = "u32" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "max_context", kind = "scalar", type = "u32" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "stream", kind = "stream" },
+  { name = "skip_kv_write", kind = "scalar", type = "bool" },
+  { name = "out_context_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
+]
+probes = [
+  { layer_idx = 1, start_pos = 16200, batch_size = 20, max_context = 16300, num_heads = 8, num_kv_heads = 2, head_dim = 256, skip_kv_write = true },
+  { layer_idx = 0, start_pos = 16128, batch_size = 1, max_context = 16129, num_heads = 16, num_kv_heads = 4, head_dim = 256, skip_kv_write = false },
+]
+
+[[launcher]]
+name = "quantize_bf16_to_q8_0"
+cpp = "kernels::LaunchDFlashQuantizeBf16ToQ8_0"
+returns = "void"
+doc = "Q8_0 copy of `total_elements` BF16 weights (the DFlash draft's copy of a BF16 target LM head)."
+requires = ["total_elements % 32 == 0"]
+params = [
+  { name = "bf16_source", kind = "in", elem = "bf16", len = "total_elements" },
+  { name = "q8_destination", kind = "out", elem = "bytes", len = "total_elements / 32 * 34" },
+  { name = "total_elements", kind = "scalar", type = "usize" },
+]
+probes = [{ total_elements = 81920 }, { total_elements = 32 }]

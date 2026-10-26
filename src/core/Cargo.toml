@@ -1,0 +1,31 @@
+[package]
+name = "gufo-core"
+version = "0.0.0"
+description = "Model-independent host code: GGUF, tokenizers, text utilities, the text-generation interface"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The package holds the Rust sources and their tests.
+include = ["Cargo.toml", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need model files (the Qwen3.8 27B GGUF): cargo test -p gufo-core --features models
+models = []
+
+[dependencies]
+gufo-formats.workspace = true
+unicode-normalization.workspace = true
+unicode-properties.workspace = true
+rustix.workspace = true
+sha2.workspace = true
+png.workspace = true
+image-webp.workspace = true
+zune-core.workspace = true
+zune-jpeg.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

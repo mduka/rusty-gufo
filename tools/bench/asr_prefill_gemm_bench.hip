@@ -12,7 +12,7 @@
 // It answers one question: is the remaining prefill gap an algorithm-selection
 // problem, or does it need a hand-written WMMA kernel?
 //
-//   nix develop -c tools/bench/build.sh asr_prefill_gemm_bench
+//   tools/bench/build.sh asr_prefill_gemm_bench
 //   /tmp/asr_prefill_gemm_bench
 
 #include <hip/hip_bf16.h>
@@ -266,9 +266,11 @@ const Case kCases[] = {
     {"audio out proj", 2048, 1024, 196},
 };
 
-// Mirrors SelectHipblasLtHeuristicRank in
-// src/models/qwen/hip/kernels/hipblaslt_gemm.hip, so the row labelled
-// `production rank` is the algorithm the runtime actually installs.
+// Mirrors the shared Qwen rank picker (upstream's SelectHipblasLtHeuristicRank)
+// that ASR used when this bench was written. It no longer matches the runtime:
+// ASR's rank choice is now AsrRank in src/models/qwen3_asr/src/gemm.rs, which
+// installs heuristic rank 6 (or the first usable algorithm), so the row
+// labelled `production rank` is the old picker's choice, not the installed one.
 constexpr std::size_t kLargeBatch = 512;
 constexpr std::size_t kLargeWideRank = 3;
 constexpr std::size_t kTallRank = 4;

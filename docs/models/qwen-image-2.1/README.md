@@ -12,8 +12,8 @@ Download about 33.1 GB and start the server:
 ```sh
 MODEL_DIR=$(hf download Qwen/Qwen-Image-2.1 \
   --revision b3179ad355be050328e483a9dfdd9e60cd62adfa)
-nix build
-./result/bin/gufo serve image --model "$MODEL_DIR" \
+cargo build --release -p gufo
+./target/release/gufo serve image --model "$MODEL_DIR" \
   --served-model-name Qwen-Image-2.1 --port 8080
 ```
 
@@ -48,7 +48,7 @@ jq -r '.data[0].b64_json' response.json | base64 --decode > output.png
 | `size` | Default `auto`: 1024² generation; reference aspect ratio for edits. Explicit sides must be multiples of 32, at most 4096 per side and 4 megapixels total. |
 | `seed`, `steps` | Seeded replay within the same build and request configuration. Default 40 steps; range 2–100. Fewer steps change quality. |
 | `n` | 1–10 outputs with independent seeds; requests execute serially on the GPU. |
-| References | Up to 10 PNG/JPEG uploads, 20 MiB encoded and 32 megapixels combined; the HTTP body limit also applies. |
+| References | Up to 10 PNG/JPEG/WebP uploads, 20 MiB encoded and 32 megapixels combined; the HTTP body limit also applies. |
 | `background` | `auto`, `transparent`, or `opaque` (composite over white). |
 
 Edit noise combines `seed` with the resized reference pixels. The same edit
@@ -73,8 +73,7 @@ models:
 ```
 
 For larger uploads, raise `--max-request-bytes` and the proxy's body limit.
-`/health`, `/ready` and `/v1/models` are available. Nix `mkGufoServe` supports
-`modality = "image"` with `model` and `servedModelName`.
+`/health`, `/ready` and `/v1/models` are available.
 
 [Benchmarks](BENCHMARKS.md) · [Quality](QUALITY.md) ·
 [Experiments](EXPERIMENTS.md)

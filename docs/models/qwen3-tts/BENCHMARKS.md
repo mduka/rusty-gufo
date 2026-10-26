@@ -1,7 +1,7 @@
 # Qwen3-TTS benchmarks
 
-2026-09-20, Linux gfx1151, BF16, Nix production build
-`8e4ba46f9dd0` (binary SHA-256 prefix). Resident models; ASR 1.7B loaded but idle.
+2026-09-20, Linux gfx1151, BF16, the upstream C++ production build.
+Resident models; ASR 1.7B loaded but idle.
 The same [37-word paragraph](QUALITY.md) is used for all three variants:
 seed 42, automatic language, talker T 0.7 / top-k 20 / top-p 0.85,
 predictor T 0.8 / top-k 30 / top-p 0.9.

@@ -10,9 +10,9 @@ only offline reference checks. Generation is deterministic greedy decoding.
 nix develop -c hf download Qwen/Qwen3-ASR-1.7B \
   --revision 7278e1e70fe206f11671096ffdd38061171dd6e5 \
   --local-dir models/Qwen3-ASR-1.7B
-nix build
-./result/bin/gufo transcribe --model models/Qwen3-ASR-1.7B --audio speech.wav
-./result/bin/gufo serve asr --model models/Qwen3-ASR-1.7B
+cargo build --release -p gufo
+./target/release/gufo transcribe --model models/Qwen3-ASR-1.7B --audio speech.wav
+./target/release/gufo serve asr --model models/Qwen3-ASR-1.7B
 ```
 
 ```sh

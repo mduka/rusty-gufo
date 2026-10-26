@@ -11,7 +11,7 @@
 #include "src/models/qwen/hip/kernels/attention_decode.hip"
 #include "src/models/qwen/hip/kernels/prefill_norm.hip"
 #include "src/models/qwen/hip/kernels/prefill_rope.hip"
-#include "tests/models/qwen/hip/support/device_buffer.hpp"
+#include "tools/qwen27b/device_buffer.hpp"
 
 namespace {
 using gufo::test::DeviceBuffer;

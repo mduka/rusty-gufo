@@ -4,7 +4,7 @@
 // Self-contained (no repository headers) so it compiles directly with hipcc on
 // the supported gfx1151 host for fast kernel-design iteration.
 //
-//   nix develop -c tools/bench/build.sh attn_causal_bench
+//   tools/bench/build.sh attn_causal_bench
 //   /tmp/attn_causal_bench -b 2048 -i 3
 //
 // Shapes are the production Qwen3.8-27B full-attention layer: 24 query heads

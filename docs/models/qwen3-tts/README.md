@@ -17,8 +17,8 @@ checkpoints are unsupported. Official Python is an offline oracle only.
 ```sh
 nix develop -c hf download Qwen/Qwen3-TTS-12Hz-1.7B-Base \
   --local-dir models/Qwen3-TTS-12Hz-1.7B-Base
-nix build
-./result/bin/gufo serve tts \
+cargo build --release -p gufo
+./target/release/gufo serve tts \
   --model models/Qwen3-TTS-12Hz-1.7B-Base \
   --voice narrator=reference.wav --voice-text narrator=reference.txt
 ```

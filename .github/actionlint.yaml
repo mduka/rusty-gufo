@@ -1,5 +1,0 @@
-self-hosted-runner:
-  labels:
-    - linux
-    - strix-halo
-    - devlab-dispatch

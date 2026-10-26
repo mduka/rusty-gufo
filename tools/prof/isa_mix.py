@@ -9,7 +9,7 @@ change can be predicted before it is measured.
 
 Usage:
   hipcc ... --cuda-device-only -S -o out.s src.hip
-  tools/isa_mix.py out.s [kernel-name-substring] [--all]
+  tools/prof/isa_mix.py out.s [kernel-name-substring] [--all]
 
 With no substring every kernel in the file is listed by instruction count.
 """

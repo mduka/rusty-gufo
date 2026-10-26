@@ -1,0 +1,20 @@
+{
+ "source": "src/models/qwen35/tests/reference/cpp_decode_dump.cpp session against the C++ baseline (gufo-org/gufo bec9787), Qwen3.8-27B-UD-Q4_K_XL.gguf, max_context 6144: Generate, then GenerateFromPrefix over prompt + output + suffix with prompt + output retained",
+ "suffix": [248046, 198, 248045, 846, 198, 6820, 799, 883, 22767, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+ "cases": [
+  {
+   "prompt": "synthetic body of 7 (prefill fixture)",
+   "body": 7,
+   "max_new_tokens": 24,
+   "first": [2064, 5686, 1040, 488, 2908, 3766, 264, 1103, 314, 2250, 43697, 3665, 25, 271, 16, 13, 2972, 32332, 332, 1317, 43792, 18675, 310, 13595],
+   "second": [8160, 369, 264, 2716, 31708, 883, 22767, 25, 271, 332, 760, 57448, 28764, 332, 271, 6651, 9704, 494, 279, 9114, 440, 13437, 20204, 11]
+  },
+  {
+   "prompt": "haiku (decode fixture)",
+   "body": null,
+   "max_new_tokens": 64,
+   "first": [54, 4541, 9626, 383, 279, 29199, 11, 198, 45742, 3594, 39248, 279, 11012, 3594, 11, 198, 10025, 32946, 45369, 13],
+   "second": [44332, 43701, 2418, 15740, 11, 198, 15582, 82, 74524, 310, 836, 52941, 37647, 11, 198, 26677, 738, 9687, 279, 12515, 13]
+  }
+ ]
+}

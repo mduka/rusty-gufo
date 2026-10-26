@@ -1,8 +1,8 @@
 """EmbeddingGemma 2 end-to-end checks over HTTP with the OpenAI SDK.
 
 Runs against an already running `gufo serve embedding` and replays the probe
-texts of tests/fixtures/embedding_gemma2/embedding_golden.json, which hold
-sentence-transformers float32 reference vectors:
+texts of src/models/embedding_gemma2/tests/fixtures/embedding_golden.json,
+which hold sentence-transformers float32 reference vectors:
 
     python3 tests/functional/embeddings.py --base-url http://127.0.0.1:8080/v1 \
         --model embeddinggemma-2
@@ -22,8 +22,8 @@ import struct
 import sys
 from pathlib import Path
 
-FIXTURE = (Path(__file__).resolve().parents[1] / "fixtures" /
-           "embedding_gemma2" / "embedding_golden.json")
+FIXTURE = (Path(__file__).resolve().parents[2] / "src" / "models" /
+           "embedding_gemma2" / "tests" / "fixtures" / "embedding_golden.json")
 MINIMUM_COSINE = 0.9999
 
 

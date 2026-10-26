@@ -1,0 +1,23 @@
+Usage: gufo serve image [OPTIONS]
+
+Serve Qwen-Image-2.1 generation and editing.
+
+Model:
+  -m, --model <DIR>          Qwen-Image-2.1 safetensors directory
+      --served-model-name <NAME> Public API model ID
+
+Server:
+  -i, --host <IP>            Bind address
+  -p, --port <N>             Port to listen on
+      --max-connections <N>  Maximum simultaneous HTTP connections
+      --max-request-bytes <N> Maximum HTTP request body bytes
+      --api-key <KEY>        API key
+      --arbiter <HOST:PORT>  Report to this gufo arbiter and follow its GPU grants
+      --sse-ping-interval <N> Seconds a stream may stay silent before a ping (-1 disables)
+
+Logging:
+      --log-level <LEVEL>    Log verbosity: error, warn, info or debug (default: info)
+  -v, --verbose              Shorthand for --log-level=debug
+
+General:
+  -h, --help                 Print help

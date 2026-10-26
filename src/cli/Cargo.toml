@@ -1,0 +1,47 @@
+[package]
+name = "gufo"
+version = "0.0.0"
+description = "The gufo command line"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The package holds the Rust sources and their tests.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[[bin]]
+name = "gufo"
+path = "src/main.rs"
+
+[features]
+# Tests that run the binary on a gfx1151 device: cargo test -p gufo --features gpu
+gpu = []
+
+[dependencies]
+gufo-cli-kernels.workspace = true
+gufo-hip.workspace = true
+gufo-core.workspace = true
+gufo-eval.workspace = true
+gufo-serve.workspace = true
+gufo-deepseek-v4-flash = { path = "../models/deepseek_v4_flash" }
+gufo-embedding-gemma2 = { path = "../models/embedding_gemma2" }
+gufo-qwen = { path = "../models/qwen" }
+gufo-qwen35 = { path = "../models/qwen35" }
+gufo-qwen38-flash-next = { path = "../models/qwen38_flash_next" }
+gufo-qwen3-asr = { path = "../models/qwen3_asr" }
+gufo-qwen3-tts = { path = "../models/qwen3_tts" }
+gufo-qwen-image-21 = { path = "../models/qwen_image_21" }
+sha2.workspace = true
+chrono.workspace = true
+rustix.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+signal-hook.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

@@ -271,7 +271,7 @@ def run(model: Path, output: Path, upstream: Path, environment: dict,
                 stream.write(f'{case["id"]}\t{prompt}\t{continuation}\n')
         manifests[group] = manifest
 
-    native = ROOT / "build/gpu-test/tests/models/deepseek_v4_flash/ds4_quality_test"
+    native = ROOT / "target/release/examples/reference"
     native_hash = sha256(native)
     control = output / "upstream-build/bin"
     if not prefill_only:
@@ -291,7 +291,7 @@ def run(model: Path, output: Path, upstream: Path, environment: dict,
     require(source_hash == production_sha256(),
             "production sources changed during the reference comparison")
     require(native_hash == sha256(native),
-            "native test binary changed during the reference comparison")
+            "native reference binary changed during the reference comparison")
     report = {
         "schema": "gufo.ds4-independent-ar-comparison.v1",
         "upstream_revision": revision,

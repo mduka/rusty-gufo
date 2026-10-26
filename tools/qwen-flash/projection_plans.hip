@@ -1,9 +1,9 @@
 // Offline gfx1151 F16 alpha/beta and router projection sweep.
-// Build with tools/bench/build.sh inside nix develop (pass this file's path).
+// Build with tools/bench/build.sh (pass this file's path).
 // Run /tmp/projection_plans > /tmp/projection-plans.csv with no other GPU work.
 // Each workspace-free candidate must match sampled F64 dots within 0.002
 // and repeat exactly before its timing can qualify a production plan.
-// hipBLASLt algorithm indices belong to the ROCm version pinned by Nix.
+// hipBLASLt algorithm indices belong to the ROCm version they were measured on.
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 #include <hipblaslt/hipblaslt.h>

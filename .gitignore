@@ -41,6 +41,7 @@
 
 # Build directories
 build/
+/target/
 Build/
 build-*/
 
@@ -105,15 +106,13 @@ __pycache__/
 !test/fixtures/**
 !tests/fixtures/
 !tests/fixtures/**
+!src/**/tests/fixtures/
+!src/**/tests/fixtures/**
 
 # Agent helpers
 .codegraph
 context.md
-# graphify: knowledge graph, report and converted sidecars live here
-graphify-out/
 
-# Uncommitted opt-in capability suites
-tests/quality/compsec.json
 
 # rocprofv3 counter dumps
 .rocprofv3/

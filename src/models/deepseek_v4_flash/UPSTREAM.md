@@ -14,17 +14,18 @@ or mutable state.
 
 ## Integration Boundary
 
-`engine.hpp` and `engine.cpp` are the stable Gufo-owned C++20 API. Product
-code uses that API for model loading, tokenization, request sessions,
-snapshots, logits, and cancellation.
+The host side is the Rust crate `gufo-deepseek-v4-flash` (`src/`): GGUF and
+model data, tokenizer, chat template, weights, the ROCm graph executor,
+request sessions, sampling, DSpark, snapshots and the serving runner, ported
+from DS4's C++ runtime bit for bit (docs/RUST.md). The C++ runtime and its
+`engine.hpp` API are gone; the parity fixtures were recorded against them
+(`tests/reference/ds4_ref_dump.cpp`, built against an upstream v0.23.0
+checkout).
 
-The imported implementation is part of the Gufo model package rather than a
-nested external project:
-
-- `runtime` owns independent C++20 modules for GGUF/model data, tokenizer,
-  sampling, request state, snapshots, and ROCm graph execution.
-- `kernels/rocm` owns every DeepSeek numerical kernel and ROCm dispatch rule.
-- `engine.hpp` and `engine.cpp` directly own the native runtime handles.
+- `kernels/rocm` owns every DeepSeek numerical kernel and ROCm dispatch rule,
+  behind the C ABI of `resident_api.h`, which the kernel crate
+  `gufo-deepseek-v4-flash-kernels` binds.
+- `src` owns the host code and calls the kernels only through that ABI.
 
 The model package intentionally duplicates numerical code instead of calling
 Qwen kernels. A DeepSeek kernel change must not alter another model's output or
@@ -43,6 +44,7 @@ When updating the imported engine:
 2. Import only code exercised by the single-device ROCm route for the
    supported artifact.
 3. Preserve the ROCm-only source and naming contract.
-4. Reapply model-private changes inside this directory, never in Qwen code.
-5. Run the DeepSeek model tests, the fast hardware suite, and the canonical
-   Nix gate before recording new performance.
+4. Reapply model-private changes inside this directory, never in Qwen code;
+   host changes go into the Rust crate.
+5. Run the DeepSeek model tests (`tools/ds4/check.py`), the fast hardware
+   suite, and the canonical gate before recording new performance.

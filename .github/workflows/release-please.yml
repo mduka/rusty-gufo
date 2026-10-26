@@ -17,8 +17,7 @@ jobs:
   release:
     name: Create daily release
     runs-on: ubuntu-latest
-    # The release PR waits for the full Devlab functional run (about an hour).
-    timeout-minutes: 180
+    timeout-minutes: 60
     # App installation tokens expire after an hour, so the long wait for checks
     # uses the job token, which lasts as long as the job.
     permissions:
@@ -37,7 +36,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: |
             gufo
-            toolboxes
           permission-actions: read
           permission-contents: write
           permission-issues: write
@@ -50,18 +48,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      - name: Request stable Toolboxes images for an existing merged release
-        if: ${{ steps.release-please.outputs.release_created == 'true' }}
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_TAG: ${{ steps.release-please.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -n --arg tag "$RELEASE_TAG" \
-            '{event_type: "gufo-release", client_payload: {tag: $tag}}' \
-            | gh api --method POST repos/gufo-org/toolboxes/dispatches --input -
 
       - name: Wait for release pull request checks
         if: >-
@@ -81,9 +67,7 @@ jobs:
 
           required_checks=(
             "Conventional Commit title"
-            "CPU contracts & repository checks"
-            # The full functional suite on Strix Halo; only releases require it.
-            "devlab/functional"
+            "Repository checks"
           )
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           block() {
@@ -96,8 +80,8 @@ jobs:
           }
 
           for pr_number in "${pr_numbers[@]}"; do
-            # Ten-second polls for up to 160 minutes.
-            for attempt in {1..960}; do
+            # Ten-second polls for up to 40 minutes.
+            for attempt in {1..240}; do
               checks_rc=0
               checks=$(gh pr checks "$pr_number" \
                 --repo "$GITHUB_REPOSITORY" \
@@ -128,8 +112,8 @@ jobs:
               if [[ "$all_passed" == true ]]; then
                 break
               fi
-              if (( attempt == 960 )); then
-                block "$pr_number" "required checks were still pending after 160 minutes"
+              if (( attempt == 240 )); then
+                block "$pr_number" "required checks were still pending after 40 minutes"
               fi
               sleep 10
             done
@@ -147,7 +131,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: |
             gufo
-            toolboxes
           permission-actions: read
           permission-contents: write
           permission-issues: write
@@ -186,15 +169,3 @@ jobs:
           token: ${{ steps.release-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      - name: Request stable Toolboxes images for the daily release
-        if: ${{ steps.publish-release.outputs.release_created == 'true' }}
-        env:
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
-          RELEASE_TAG: ${{ steps.publish-release.outputs.tag_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -n --arg tag "$RELEASE_TAG" \
-            '{event_type: "gufo-release", client_payload: {tag: $tag}}' \
-            | gh api --method POST repos/gufo-org/toolboxes/dispatches --input -

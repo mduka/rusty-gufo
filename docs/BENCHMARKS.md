@@ -1,14 +1,15 @@
 # Benchmark methodology
 
-Build with `nix build` and measure binaries under `result/bin`. Per-model
-results and qualification gaps live in:
+Build with `cargo build --release -p gufo` and measure `target/release/gufo`.
+Per-model results and qualification gaps live in:
 
 - [DeepSeek V4 Flash](models/deepseek-v4-flash/BENCHMARKS.md)
 - [Qwen3.8 27B](models/qwen3.8-27b/BENCHMARKS.md)
 - [Qwen3.8 Flash-Next](models/qwen3.8-flash-next/BENCHMARKS.md)
 - [Qwen3-TTS](models/qwen3-tts/BENCHMARKS.md)
 - [Qwen3-ASR](models/qwen3-asr/BENCHMARKS.md)
-- [MiniMax H3](models/minimax-h3/BENCHMARKS.md)
+- [EmbeddingGemma 2](models/embeddinggemma-2/BENCHMARKS.md)
+- [Qwen-Image-2.1](models/qwen-image-2.1/BENCHMARKS.md)
 
 ## Model benchmark driver
 
@@ -112,23 +113,11 @@ answers through the OpenAI-compatible server.
 
 ## Focused kernel measurements
 
-Build development tools with `cmake --preset gpu-test` and
-`cmake --build --preset gpu-test --target gufo-kernel-bench tune_hipblaslt`.
-They are omitted from the production package.
-
-`gufo-kernel-bench` exercises production HIP entry points without loading a
-model. Correctness sentinels run outside the timed interval:
-
-```sh
-./build/gpu-test/gufo-kernel-bench --help
-./build/gpu-test/gufo-kernel-bench \
-  --case decode-attention --context 4096,8192,12288,16384 \
-  --warmup 5 --repetitions 30 --json
-```
-
-Standalone microbenchmarks under `tools/bench` and model-specific tool folders
-report component correctness alongside timing. Their numbers do not replace
-end-to-end model measurements. Collect profiler traces separately and use
+Standalone microbenchmarks under `tools/bench` (`tools/bench/build.sh`) and
+model-specific tool folders exercise HIP kernels without loading a model and
+report component correctness alongside timing. They are not part of the
+binary, and their numbers do not replace end-to-end model measurements.
+Collect profiler traces separately and use
 [the performance guide](PERFORMANCE.md) to identify the limiting operation.
 
 ## Reporting and artifact retention

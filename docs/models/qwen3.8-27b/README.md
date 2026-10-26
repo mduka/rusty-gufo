@@ -14,11 +14,11 @@ nix develop -c hf download unsloth/Qwen3.8-27B-GGUF \
   --local-dir models/qwen3.8-27b
 nix develop -c hf download z-lab/Qwen3.8-27B-DFlash2-GGUF \
   Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir models/qwen3.8-27b
-nix build
+cargo build --release -p gufo
 MODEL=models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
 DRAFT=models/qwen3.8-27b/Qwen3.8-27B-DFlash2-Q4_K_M.gguf
-./result/bin/gufo chat --model "$MODEL"
-./result/bin/gufo serve llm --model "$MODEL" --speculative dflash2 \
+./target/release/gufo chat --model "$MODEL"
+./target/release/gufo serve llm --model "$MODEL" --speculative dflash2 \
   --dflash-model "$DRAFT" --sessions 2 --context 32768
 ```
 
@@ -38,11 +38,12 @@ sampling defaults are described in [the server guide](../../SERVER.md#reasoning-
 ## Images
 
 Use the matching `mmproj-BF16.gguf` beside the target or pass `--mmproj PATH`.
-Vision weights upload lazily. Repeat `--image` in `prompt` or `chat`; chat
+`prompt` and `chat` upload vision weights with the first image; `serve`
+prepares them before it reports ready. Repeat `--image` in `prompt` or `chat`; chat
 attaches them to the first user turn. Images count toward context capacity.
 
 ```sh
-./result/bin/gufo prompt --model "$MODEL" --image photo.jpg \
+./target/release/gufo prompt --model "$MODEL" --image photo.jpg \
   --prompt "Describe this image." --temperature 0
 ```
 
@@ -62,7 +63,8 @@ print(urllib.request.urlopen(request).read().decode())
 
 Start that server with `--served-model-name vision-test`. Ordered text/image
 parts, multiple images and later turns work with AR/DFlash2 and caches.
-PNG/JPEG data URLs and public HTTPS are supported (`detail: auto`); requests
+PNG/JPEG data URLs and public HTTPS are supported (every standard `detail`
+behaves as `auto`); requests
 share a 20 MiB encoded-byte, 16-image and 15-second download budget. Each image
 is capped at 32 megapixels; private/loopback/link-local destinations are rejected.
 Official dynamic resizing allows 64–16384 merged image tokens.

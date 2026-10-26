@@ -1,0 +1,23 @@
+Usage: gufo serve embedding [OPTIONS]
+
+Serve EmbeddingGemma 2 text embeddings.
+
+Model:
+  -m, --model <DIR>          EmbeddingGemma 2 model directory
+      --served-model-name <NAME> Public API model ID (default: embeddinggemma-2)
+
+Server:
+  -i, --host <IP>            Bind address
+  -p, --port <N>             Port to listen on
+      --max-connections <N>  Maximum simultaneous HTTP connections
+      --max-request-bytes <N> Maximum HTTP request body bytes
+      --api-key <KEY>        API key
+      --arbiter <HOST:PORT>  Report to this gufo arbiter and follow its GPU grants
+      --sse-ping-interval <N> Seconds a stream may stay silent before a ping (-1 disables)
+
+Logging:
+      --log-level <LEVEL>    Log verbosity: error, warn, info or debug (default: info)
+  -v, --verbose              Shorthand for --log-level=debug
+
+General:
+  -h, --help                 Print help

@@ -1,6 +1,6 @@
 # Qwen-Image-2.1 benchmarks
 
-AMD Strix Halo gfx1151, BF16 checkpoint, production `nix build` binary.
+AMD Strix Halo gfx1151, BF16 checkpoint, production release binary.
 Report wall time per complete image plus prompt, denoising and VAE time.
 Warm runs exclude model loading. HTTP timings use no profiler or correctness
 observer; GPU times come from a separate request-only profile.

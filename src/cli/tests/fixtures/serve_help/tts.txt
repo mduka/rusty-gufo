@@ -1,0 +1,27 @@
+Usage: gufo serve tts [OPTIONS]
+
+Serve Qwen3-TTS speech synthesis.
+
+Model:
+  -m, --model <DIR>          Qwen3-TTS 12Hz 1.7B model directory
+  -c, --context <N>          Context capacity (default: 4096)
+      --served-model-name <NAME> Public API model ID
+      --voice <NAME=PATH>    Register a named Qwen3-TTS Base voice from a reference WAV (repeatable)
+      --voice-lang <NAME=LANGUAGE> Language a --voice speaks; used when a request omits 'language' (repeatable)
+      --voice-text <NAME=TEXT|PATH> Reference transcript for a --voice, given inline or as a file path; defaults to a .txt sidecar beside the WAV (repeatable)
+
+Server:
+  -i, --host <IP>            Bind address
+  -p, --port <N>             Port to listen on
+      --max-connections <N>  Maximum simultaneous HTTP connections
+      --max-request-bytes <N> Maximum HTTP request body bytes
+      --api-key <KEY>        API key
+      --arbiter <HOST:PORT>  Report to this gufo arbiter and follow its GPU grants
+      --sse-ping-interval <N> Seconds a stream may stay silent before a ping (-1 disables)
+
+Logging:
+      --log-level <LEVEL>    Log verbosity: error, warn, info or debug (default: info)
+  -v, --verbose              Shorthand for --log-level=debug
+
+General:
+  -h, --help                 Print help

@@ -13,6 +13,8 @@ weights and DSpark sidecar are [pinned](artifacts/model-identities.json).
 | Sampling / sessions | p/q acceptance, residual correction, seeded replay, EOS/cancellation, three-turn continuation and disk restore pass |
 | Optimized versus Debug | **33/2327** greedy choices differ |
 | Historical capability set | **53/75** correct; 22 failures, no execution errors, nine length finishes |
+| Pinned antirez/ds4 trajectory | **111/128** top-1, rank sum 149, worst rank 3 (gate: 116, 142, 3); optimized C++ and Rust builds give identical logits |
+| HTTP C1 seeded sampling | Equal to a session with the server's prefill schedule; against one whole-prompt prefill **25/32** tokens before a sampled choice flips, in C++ and Rust alike |
 
 Evidence: [DSpark sampling/replay](artifacts/dspark-sampling.json),
 [boundary/HTTP checks](artifacts/indexer-boundary.json),
@@ -25,12 +27,15 @@ Ask before rerunning the 75-question capability set.
 
 ## Reproduce
 
-Use the smallest affected [maintained suite](../../../tools/ds4/README.md):
+The checks run on the Rust engine (`tests/quality.rs`, `tests/serving.rs`
+and the EOS boundary of `gufo-deepseek-v4-flash`, the sampled CLI chat of
+`gufo`); the kernel operator oracles remain C++. Use the smallest affected
+[maintained suite](../../../tools/ds4/README.md), outside `nix develop`:
 
 ```sh
-nix develop -c tools/ds4/check.py fast
-nix develop -c tools/ds4/check.py kernels
-nix develop -c tools/ds4/check.py model --model "$MODEL" --dspark-model "$DSPARK"
+tools/ds4/check.py fast
+tools/ds4/check.py kernels
+tools/ds4/check.py model --model "$MODEL" --dspark-model "$DSPARK"
 ```
 
 Independent FP64 operators and exact sparse top-k checks supplement model/state

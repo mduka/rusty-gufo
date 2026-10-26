@@ -4,6 +4,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -945,6 +946,29 @@ bool LaunchTextDecodeGemv(const TextDecodeGemvTensor* tensors,
       packed, static_cast<const hip_bfloat16*>(input_bfloat16),
       static_cast<std::uint32_t>(k_vectors));
   return true;
+}
+
+bool LaunchTextDecodeGemvFlat(const void* weights0_bfloat16, float* output0,
+                              std::uint32_t rows0,
+                              const void* weights1_bfloat16, float* output1,
+                              std::uint32_t rows1,
+                              const void* weights2_bfloat16, float* output2,
+                              std::uint32_t rows2, const void* input_bfloat16,
+                              std::size_t columns, hipStream_t stream) {
+  if ((weights1_bfloat16 == nullptr) != (output1 == nullptr) ||
+      (weights2_bfloat16 == nullptr) != (output2 == nullptr)) {
+    return false;
+  }
+  const std::array<TextDecodeGemvTensor, kTextDecodeGemvMaxTensors> tensors{{
+      {weights0_bfloat16, output0, rows0},
+      {weights1_bfloat16, output1, rows1},
+      {weights2_bfloat16, output2, rows2},
+  }};
+  const std::uint32_t count = weights1_bfloat16 == nullptr
+                                  ? 1U
+                                  : (weights2_bfloat16 == nullptr ? 2U : 3U);
+  return LaunchTextDecodeGemv(tensors.data(), count, input_bfloat16, columns,
+                              stream);
 }
 
 void LaunchTextArgmax(const float* logits, std::uint32_t* output_token,

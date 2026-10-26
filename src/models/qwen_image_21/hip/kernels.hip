@@ -1,17 +1,11 @@
 #include <hip/hip_bfloat16.h>
 
-#include <algorithm>
-#include <bit>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
-#include <limits>
-#include <mutex>
-#include <stdexcept>
-#include <utility>
+#include <cstdint>
 
 #include "src/models/qwen_image_21/hip/bf16.hpp"
-#include "src/models/qwen_image_21/hip/runtime.hpp"
+#include "src/models/qwen_image_21/hip/ops.hpp"
 
 namespace gufo::models::qwen_image_21::hip {
 namespace {
@@ -574,17 +568,8 @@ __global__ void Position(const B* x, const B* table, B* y, int height,
   y[i] = Bf16(float(x[i]) + Round(p0 + p1 + p2 + p3));
 }
 
-void BlasCheck(hipblasStatus_t status) {
-  if (status != HIPBLAS_STATUS_SUCCESS)
-    throw std::runtime_error("Qwen-Image hipBLAS failed: " +
-                             std::to_string(status));
-}
-
 unsigned Blocks(std::size_t n) {
   return static_cast<unsigned>((n + 255) / 256);
-}
-B* Ptr(const Matrix& m) {
-  return reinterpret_cast<B*>(m.data);
 }
 
 }  // namespace
@@ -642,704 +627,209 @@ void ReorderHeads(const std::uint16_t* input, std::uint16_t* output, int rows,
   }
 }
 
-void Check(hipError_t status) {
-  if (status != hipSuccess)
-    throw std::runtime_error(std::string("Qwen-Image HIP: ") +
-                             hipGetErrorString(status));
+void LaunchFloatToBf16(const float* input, void* output, std::size_t count,
+                       hipStream_t stream) {
+  FloatToBf16<<<Blocks(count), 256, 0, stream>>>(input, static_cast<B*>(output),
+                                                 count);
 }
 
-Matrix Matrix::Slice(int start, int count) const {
-  if (packed || start < 0 || count < 0 || start > rows - count)
-    throw std::logic_error("invalid Qwen-Image tensor slice");
-  return {owner, data + static_cast<std::size_t>(start) * cols, count, cols};
+void LaunchBf16ToFloat(const void* input, float* output, std::size_t count,
+                       hipStream_t stream) {
+  Bf16ToFloat<<<Blocks(count), 256, 0, stream>>>(static_cast<const B*>(input),
+                                                 output, count);
 }
 
-Matrix Matrix::Reshape(int r, int c) const {
-  if (packed || r <= 0 || c <= 0 || static_cast<std::size_t>(r) * c != size())
-    throw std::logic_error("invalid Qwen-Image tensor reshape");
-  return {owner, data, r, c};
+void LaunchAddBias(const float* input, const void* bias, void* output,
+                   std::uint32_t columns, std::size_t count, bool convolution,
+                   hipStream_t stream) {
+  const auto* b = static_cast<const B*>(bias);
+  auto* y = static_cast<B*>(output);
+  if (convolution)
+    Bias<true><<<Blocks(count), 256, 0, stream>>>(
+        input, b, y, static_cast<int>(columns), count);
+  else
+    Bias<false><<<Blocks(count), 256, 0, stream>>>(
+        input, b, y, static_cast<int>(columns), count);
 }
 
-struct Runtime::Pool {
-  static constexpr std::size_t kMaxCachedBytes = 8ULL << 30;
-  std::multimap<std::size_t, void*> free;
-  std::size_t cached_bytes{0};
-  ~Pool() { Clear(); }
-  void Clear() noexcept {
-    for (auto [size, p] : free) {
-      (void)size;
-      (void)hipFree(p);
-    }
-    free.clear();
-    cached_bytes = 0;
-  }
-  void Release(void* p, std::size_t bytes) noexcept {
-    if (bytes <= kMaxCachedBytes - cached_bytes) {
-      try {
-        free.emplace(bytes, p);
-        cached_bytes += bytes;
-        return;
-      } catch (...) {
-        // Returning a tensor during exception unwinding must not throw.
-      }
-    }
-    (void)hipFree(p);
-  }
-  std::shared_ptr<void> Allocate(std::size_t bytes,
-                                 const std::shared_ptr<Pool>& self) {
-    void* p = nullptr;
-    auto it = free.lower_bound(bytes);
-    if (it != free.end() && it->first <= bytes * 2) {
-      bytes = it->first;
-      p = it->second;
-      cached_bytes -= bytes;
-      free.erase(it);
-    } else {
-      auto status = hipMalloc(&p, bytes);
-      if (status == hipErrorOutOfMemory && !free.empty()) {
-        Clear();
-        (void)hipGetLastError();
-        status = hipMalloc(&p, bytes);
-      }
-      Check(status);
-    }
-    return std::shared_ptr<void>(p, [self, bytes](void* value) noexcept {
-      self->Release(value, bytes);
-    });
-  }
-};
-
-Runtime::Runtime(const Weights& weights)
-    : pool_(std::make_shared<Pool>()), weights_(weights) {
-  Check(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
-  try {
-    BlasCheck(hipblasCreate(&blas_));
-    BlasCheck(hipblasSetStream(blas_, stream_));
-  } catch (...) {
-    if (blas_)
-      (void)hipblasDestroy(blas_);
-    (void)hipStreamDestroy(stream_);
-    throw;
-  }
+void LaunchActivate(const void* input, void* output, std::size_t count,
+                    std::uint32_t activation, hipStream_t stream) {
+  Elementwise<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(input), nullptr, static_cast<B*>(output), count,
+      static_cast<int>(activation), 0);
 }
 
-Runtime::~Runtime() {
-  (void)hipStreamSynchronize(stream_);
-  for (std::size_t i = 0; i < staging_.size(); ++i) {
-    if (staging_[i])
-      (void)hipHostFree(staging_[i]);
-    if (staging_done_[i])
-      (void)hipEventDestroy(staging_done_[i]);
-  }
-  device_weights_.clear();
-  packed_source_ = {};
-  packed_input_ = {};
-  pool_.reset();
-  if (blas_)
-    (void)hipblasDestroy(blas_);
-  if (stream_)
-    (void)hipStreamDestroy(stream_);
+void LaunchSwiGlu(const void* gate, const void* up, void* output,
+                  std::size_t count, hipStream_t stream) {
+  Elementwise<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(gate), static_cast<const B*>(up),
+      static_cast<B*>(output), count, 4, 0);
 }
 
-// Copy mapped weights through runtime-owned pinned buffers. A direct
-// hipMemcpyAsync from the file mapping lets HIP pin the mapped page-cache
-// pages for the transfer; when the host reclaims them, every invalidation
-// evicts this process's GPU queues, and a 64 GB host stalls indefinitely.
-void Runtime::UploadMapped(void* device, const void* host, std::size_t bytes) {
-  constexpr std::size_t kStagingBytes = 64ULL << 20;
-  for (std::size_t i = 0; i < staging_.size(); ++i) {
-    if (!staging_[i])
-      Check(hipHostMalloc(&staging_[i], kStagingBytes, hipHostMallocDefault));
-    if (!staging_done_[i])
-      Check(hipEventCreateWithFlags(&staging_done_[i], hipEventDisableTiming));
-  }
-  auto* target = static_cast<std::byte*>(device);
-  const auto* source = static_cast<const std::byte*>(host);
-  for (std::size_t offset = 0, slot = 0; offset < bytes;
-       offset += kStagingBytes, slot ^= 1U) {
-    const auto chunk = std::min(kStagingBytes, bytes - offset);
-    // The buffer is reused only after its previous copy has completed.
-    Check(hipEventSynchronize(staging_done_[slot]));
-    std::memcpy(staging_[slot], source + offset, chunk);
-    Check(hipMemcpyAsync(target + offset, staging_[slot], chunk,
-                         hipMemcpyHostToDevice, stream_));
-    Check(hipEventRecord(staging_done_[slot], stream_));
-  }
+void LaunchAdd(const void* left, const void* right, void* output,
+               std::size_t count, hipStream_t stream) {
+  Elementwise<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(left), static_cast<const B*>(right),
+      static_cast<B*>(output), count, 5, 0);
 }
 
-Matrix Runtime::Raw(std::size_t bytes) {
-  if (!bytes || bytes > (32ULL << 30))
-    throw std::length_error("Qwen-Image tensor exceeds memory limit");
-  auto owner = pool_->Allocate(bytes, pool_);
-  return {owner, static_cast<std::uint16_t*>(owner.get()), 1, 1};
+void LaunchEuler(const void* sample, const void* velocity, void* output,
+                 std::size_t count, float dt, hipStream_t stream) {
+  Elementwise<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(sample), static_cast<const B*>(velocity),
+      static_cast<B*>(output), count, 6, dt);
 }
 
-Matrix Runtime::New(int rows, int cols) {
-  if (rows <= 0 || cols <= 0)
-    throw std::logic_error("empty Qwen-Image tensor");
-  auto m = Raw(static_cast<std::size_t>(rows) * cols * 2);
-  m.rows = rows;
-  m.cols = cols;
-  return m;
+void LaunchPrepareModulation(const void* input, void* output,
+                             std::uint32_t count, bool gates,
+                             hipStream_t stream) {
+  PrepareModulation<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<B*>(output),
+      static_cast<int>(count), gates);
 }
 
-Matrix Runtime::Upload(std::span<const float> values, int rows, int cols) {
-  if (values.size() != static_cast<std::size_t>(rows) * cols)
-    throw std::logic_error("Qwen-Image upload size mismatch");
-  Matrix result = New(rows, cols);
-  std::vector<std::uint16_t> packed(values.size());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    auto bits = std::bit_cast<std::uint32_t>(values[i]);
-    packed[i] = static_cast<std::uint16_t>(
-        (bits + 0x7fffU + ((bits >> 16) & 1U)) >> 16);
-  }
-  Check(hipMemcpyAsync(result.data, packed.data(), packed.size() * 2,
-                       hipMemcpyHostToDevice, stream_));
-  Synchronize();
-  return result;
+void LaunchNormalizeModulate(const void* input, const void* modulation,
+                             void* output, std::uint32_t rows,
+                             std::uint32_t modulation_columns,
+                             std::uint32_t part, std::uint32_t prefix,
+                             hipStream_t stream) {
+  NormModulation<<<rows, 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<const B*>(modulation),
+      static_cast<B*>(output), static_cast<int>(modulation_columns),
+      static_cast<int>(part), static_cast<int>(prefix));
 }
 
-Matrix Runtime::UploadFloat(std::span<const float> values, int rows, int cols) {
-  if (values.size() != static_cast<std::size_t>(rows) * cols)
-    throw std::logic_error("FP32 upload size mismatch");
-  auto out = New(rows, cols * 2);
-  Check(hipMemcpyAsync(out.data, values.data(), values.size() * 4,
-                       hipMemcpyHostToDevice, stream_));
-  Synchronize();
-  return out;
+void LaunchModulate(const void* input, const void* modulation,
+                    const void* residual, void* output, std::uint32_t rows,
+                    std::uint32_t columns, std::uint32_t modulation_columns,
+                    std::uint32_t part, std::uint32_t prefix,
+                    hipStream_t stream) {
+  Modulation<<<Blocks(static_cast<std::size_t>(rows) * columns), 256, 0,
+               stream>>>(
+      static_cast<const B*>(input), static_cast<const B*>(modulation),
+      static_cast<const B*>(residual), static_cast<B*>(output),
+      static_cast<int>(rows), static_cast<int>(columns),
+      static_cast<int>(modulation_columns), static_cast<int>(part),
+      static_cast<int>(prefix));
 }
 
-Matrix Runtime::Weight(std::string_view name) {
-  if (auto it = device_weights_.find(name); it != device_weights_.end())
-    return it->second;
-  // Fault complete active components in parallel instead of serial faults
-  // during each HIP upload. Text-to-image never needs the visual encoder.
-  for (const std::string_view prefix :
-       {"transformer.", "text_encoder.model.language_model.",
-        "text_encoder.model.visual.", "vae.encoder.", "vae.decoder."}) {
-    if (name.starts_with(prefix) &&
-        std::ranges::find(prefetched_groups_, prefix) ==
-            prefetched_groups_.end()) {
-      weights_.Prefetch(prefix);
-      prefetched_groups_.push_back(prefix);
-      break;
-    }
-  }
-  const auto& w = weights_.Get(name);
-  const int rows = w.shape.empty() ? 1 : w.shape[0];
-  const auto count = w.bytes / (w.bf16 ? 2 : 4);
-  if (count / rows > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-    throw std::runtime_error("Qwen-Image weight exceeds matrix dimensions");
-  const int cols = static_cast<int>(count / rows);
-  Matrix m = New(rows, cols);
-  if (w.bf16)
-    UploadMapped(m.data, w.data, w.bytes);
-  else {
-    auto raw = Raw(w.bytes);
-    UploadMapped(raw.data, w.data, w.bytes);
-    FloatToBf16<<<Blocks(count), 256, 0, stream_>>>(
-        reinterpret_cast<const float*>(raw.data), Ptr(m), count);
-  }
-  const bool packed_convolution = w.shape.size() == 4 && w.shape[2] == 3 &&
-                                  w.shape[3] == 3 &&
-                                  Convolve3Shape(w.shape[1], rows);
-  if (packed_convolution ||
-      (w.shape.size() == 2 && DenseShape(rows, cols) &&
-       name.ends_with(".weight") &&
-       !weights_.Contains(std::string(name.substr(0, name.size() - 7)) +
-                          ".bias"))) {
-    auto packed = New(rows, cols);
-    PackDense16(m.data, packed.data, rows, cols, stream_);
-    packed.packed = true;
-    m = std::move(packed);
-  }
-  Synchronize();
-  weight_bytes_ += count * 2;
-  device_weights_.emplace(std::string(name), m);
-  return m;
+void LaunchRotary(const void* input, void* output, const float* frequencies,
+                  std::uint32_t rows, std::uint32_t heads, std::uint32_t dim,
+                  std::uint32_t mode, hipStream_t stream) {
+  Rotary<<<Blocks(static_cast<std::size_t>(rows) * heads * dim / 2), 256, 0,
+           stream>>>(static_cast<const B*>(input), static_cast<B*>(output),
+                     frequencies, static_cast<int>(rows),
+                     static_cast<int>(heads), static_cast<int>(dim),
+                     static_cast<int>(mode));
 }
 
-Matrix Runtime::PackedInput(const Matrix& x) {
-  if (x.packed)
-    return x;
-  // Inputs are immutable. Retaining the source owner prevents pool reuse
-  // from mistaking a new tensor for a cached QKV/gate-up input.
-  if (packed_source_.data != x.data || packed_source_.rows != x.rows ||
-      packed_source_.cols != x.cols) {
-    auto packed = New(x.rows, x.cols);
-    PackDense16(x.data, packed.data, x.rows, x.cols, stream_);
-    packed.packed = true;
-    packed_source_ = x;
-    packed_input_ = std::move(packed);
-  }
-  return packed_input_;
+void LaunchSoftmax(const float* scores, float* probabilities,
+                   std::uint32_t heads, std::uint32_t queries,
+                   std::uint32_t keys, std::uint32_t query_start,
+                   const std::int32_t* limits, float scale,
+                   hipStream_t stream) {
+  const unsigned blocks = heads * queries;
+  const int kv_rows = static_cast<int>(keys);
+  const int count = static_cast<int>(queries);
+  const int start = static_cast<int>(query_start);
+  if (keys >= 4096 && keys <= 4352)
+    SoftmaxCached<17><<<blocks, 256, 0, stream>>>(
+        scores, probabilities, kv_rows, count, start, limits, scale);
+  else if (keys > 4352 && keys <= 8448)
+    SoftmaxCached<33><<<blocks, 256, 0, stream>>>(
+        scores, probabilities, kv_rows, count, start, limits, scale);
+  else
+    Softmax<<<blocks, 256, 0, stream>>>(scores, probabilities, kv_rows, count,
+                                        start, limits, scale);
 }
 
-void Runtime::Matmul(const Matrix& x, const Matrix& w, Matrix& output,
-                     const Matrix* bias, bool convolution) {
-  if (x.cols != w.cols || output.cols != w.rows || output.rows != x.rows)
-    throw std::logic_error("Qwen-Image GEMM shape mismatch");
-  if (bias && bias->size() != static_cast<std::size_t>(output.cols))
-    throw std::logic_error("Qwen-Image bias shape mismatch");
-  if (w.packed) {
-    if (bias)
-      throw std::logic_error("Qwen-Image packed projection contract mismatch");
-    const auto packed = PackedInput(x);
-    if (!DenseBf16(w.data, packed.data, output.data, x.rows, w.rows, x.cols,
-                   stream_))
-      throw std::logic_error("unsupported Qwen-Image packed projection");
-    Check(hipGetLastError());
-    return;
-  }
-  if (x.packed)
-    throw std::logic_error(
-        "Qwen-Image packed input requires a packed projection");
-  const float alpha = 1, beta = 0;
-  Matrix accumulation;
-  void* dst = output.data;
-  if (bias) {
-    accumulation = Raw(output.size() * 4);
-    dst = accumulation.data;
-  }
-  if (!gemm_.Run(w.data, x.data, dst, x.rows, w.rows, x.cols, bias != nullptr,
-                 stream_))
-    BlasCheck(hipblasGemmEx(blas_, HIPBLAS_OP_T, HIPBLAS_OP_N, w.rows, x.rows,
-                            x.cols, &alpha, w.data, HIP_R_16BF, w.cols, x.data,
-                            HIP_R_16BF, x.cols, &beta, dst,
-                            bias ? HIP_R_32F : HIP_R_16BF, output.cols,
-                            HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT));
-  if (bias) {
-    if (convolution)
-      Bias<true><<<Blocks(output.size()), 256, 0, stream_>>>(
-          reinterpret_cast<float*>(accumulation.data), Ptr(*bias), Ptr(output),
-          output.cols, output.size());
-    else
-      Bias<false><<<Blocks(output.size()), 256, 0, stream_>>>(
-          reinterpret_cast<float*>(accumulation.data), Ptr(*bias), Ptr(output),
-          output.cols, output.size());
-  }
-  Check(hipGetLastError());
+void LaunchCopyColumns(const void* input, void* output, std::uint32_t rows,
+                       std::uint32_t input_columns, std::uint32_t start,
+                       std::uint32_t columns, hipStream_t stream) {
+  CopyColumns<<<Blocks(static_cast<std::size_t>(rows) * columns), 256, 0,
+                stream>>>(static_cast<const B*>(input), static_cast<B*>(output),
+                          static_cast<int>(rows),
+                          static_cast<int>(input_columns),
+                          static_cast<int>(start), static_cast<int>(columns));
 }
 
-Matrix Runtime::Linear(const Matrix& x, const std::string& name) {
-  const auto w = Weight(name + ".weight");
-  auto out = New(x.rows, w.rows);
-  Matrix bias;
-  if (weights_.Contains(name + ".bias"))
-    bias = Weight(name + ".bias");
-  Matmul(x, w, out, bias.data ? &bias : nullptr,
-         weights_.Get(name + ".weight").shape.size() > 2);
-  return out;
+void LaunchEmbedding(const void* table, void* output, const std::uint32_t* ids,
+                     std::uint32_t count, std::uint32_t columns,
+                     hipStream_t stream) {
+  Embedding<<<Blocks(static_cast<std::size_t>(count) * columns), 256, 0,
+              stream>>>(static_cast<const B*>(table), static_cast<B*>(output),
+                        ids, static_cast<int>(count),
+                        static_cast<int>(columns));
 }
 
-Matrix Runtime::Normalize(const Matrix& x, Norm kind, const std::string& weight,
-                          float epsilon, bool silu) {
-  Matrix w, bias;
-  if (!weight.empty()) {
-    w = Weight(weight + (kind == Norm::kVae ? ".gamma" : ".weight"));
-    if (weights_.Contains(weight + ".bias"))
-      bias = Weight(weight + ".bias");
-    if (w.size() != static_cast<std::size_t>(x.cols))
-      throw std::logic_error("Qwen-Image norm shape mismatch");
-    if (bias.data && bias.size() != w.size())
-      throw std::logic_error("Qwen-Image norm bias shape mismatch");
-  }
-  auto out = New(x.rows, x.cols);
-  NormalizeRows(x.data, out.data, w.data, bias.data, x.rows, x.cols, kind,
-                epsilon, stream_, silu);
-  Check(hipGetLastError());
-  return out;
+void LaunchScatterRows(const void* values, void* output,
+                       const std::int32_t* positions, std::uint32_t count,
+                       std::uint32_t columns, bool add, hipStream_t stream) {
+  Scatter<<<Blocks(static_cast<std::size_t>(count) * columns), 256, 0,
+            stream>>>(static_cast<const B*>(values), static_cast<B*>(output),
+                      positions, static_cast<int>(count),
+                      static_cast<int>(columns), add);
 }
 
-Matrix Runtime::Activate(const Matrix& x, Activation activation) {
-  auto out = New(x.rows, x.cols);
-  Elementwise<<<Blocks(x.size()), 256, 0, stream_>>>(
-      Ptr(x), nullptr, Ptr(out), x.size(), static_cast<int>(activation), 0);
-  Check(hipGetLastError());
-  return out;
+void LaunchIm2col(const void* input, void* output, std::uint32_t height,
+                  std::uint32_t width, std::uint32_t channels,
+                  std::uint32_t kernel, std::uint32_t stride,
+                  std::uint32_t padding, std::uint32_t upscale,
+                  std::uint32_t output_width, std::uint32_t start,
+                  std::uint32_t count, hipStream_t stream) {
+  const auto size =
+      static_cast<std::size_t>(count) * channels * kernel * kernel;
+  Im2col<<<Blocks(size), 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<B*>(output),
+      static_cast<int>(height), static_cast<int>(width),
+      static_cast<int>(channels), static_cast<int>(kernel),
+      static_cast<int>(stride), static_cast<int>(padding),
+      static_cast<int>(upscale), static_cast<int>(output_width),
+      static_cast<int>(start), static_cast<int>(count));
 }
 
-Matrix Runtime::SwiGlu(const Matrix& gate, const Matrix& up) {
-  if (gate.rows != up.rows || gate.cols != up.cols)
-    throw std::logic_error("SwiGLU shape");
-  auto out = New(gate.rows, gate.cols);
-  Elementwise<<<Blocks(gate.size()), 256, 0, stream_>>>(
-      Ptr(gate), Ptr(up), Ptr(out), gate.size(), 4, 0);
-  Check(hipGetLastError());
-  return out;
+void LaunchDownShortcut(const void* input, void* output, std::uint32_t height,
+                        std::uint32_t width, std::uint32_t input_channels,
+                        std::uint32_t output_channels, std::uint32_t temporal,
+                        std::uint32_t spatial, hipStream_t stream) {
+  const auto size = static_cast<std::size_t>(height / spatial) *
+                    (width / spatial) * output_channels;
+  Shortcut<<<Blocks(size), 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<B*>(output),
+      static_cast<int>(height), static_cast<int>(width),
+      static_cast<int>(input_channels), static_cast<int>(output_channels),
+      static_cast<int>(temporal), static_cast<int>(spatial), false);
 }
 
-Matrix Runtime::GatedLinear(const Matrix& x, const std::string& gate,
-                            const std::string& up) {
-  const auto g = Weight(gate + ".weight"), u = Weight(up + ".weight");
-  if (!g.packed || !u.packed || g.rows != u.rows || g.cols != u.cols ||
-      x.cols != g.cols)
-    throw std::logic_error("Qwen-Image gated projection contract mismatch");
-  auto out = New(x.rows, g.rows);
-  const auto packed = PackedInput(x);
-  if (!DenseSwiGlu(g.data, u.data, packed.data, out.data, x.rows, g.rows,
-                   x.cols, stream_))
-    throw std::logic_error("unsupported Qwen-Image gated projection");
-  Check(hipGetLastError());
-  out.packed = true;
-  return out;
+void LaunchUpShortcut(const void* input, void* output, std::uint32_t height,
+                      std::uint32_t width, std::uint32_t input_channels,
+                      std::uint32_t output_channels, std::uint32_t temporal,
+                      hipStream_t stream) {
+  const auto size =
+      static_cast<std::size_t>(height) * width * 4 * output_channels;
+  Shortcut<<<Blocks(size), 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<B*>(output),
+      static_cast<int>(height), static_cast<int>(width),
+      static_cast<int>(input_channels), static_cast<int>(output_channels),
+      static_cast<int>(temporal), 2, true);
 }
 
-Matrix Runtime::Add(const Matrix& a, const Matrix& b) {
-  if (a.rows != b.rows || a.cols != b.cols)
-    throw std::logic_error("residual shape");
-  auto out = New(a.rows, a.cols);
-  Elementwise<<<Blocks(a.size()), 256, 0, stream_>>>(Ptr(a), Ptr(b), Ptr(out),
-                                                     a.size(), 5, 0);
-  Check(hipGetLastError());
-  return out;
+void LaunchScaleLatents(const void* input, void* output, const void* mean,
+                        const void* deviation, std::size_t count, bool encode,
+                        hipStream_t stream) {
+  ScaleLatents<<<Blocks(count), 256, 0, stream>>>(
+      static_cast<const B*>(input), static_cast<B*>(output),
+      static_cast<const B*>(mean), static_cast<const B*>(deviation), count,
+      encode);
 }
 
-Matrix Runtime::ModulationFactors(const Matrix& mod, bool gates) {
-  if (mod.rows != 2 || mod.cols != (gates ? 16384 : 4096))
-    throw std::logic_error("Qwen-Image modulation factors shape mismatch");
-  auto out = New(mod.rows, mod.cols);
-  PrepareModulation<<<Blocks(mod.size()), 256, 0, stream_>>>(Ptr(mod), Ptr(out),
-                                                             mod.size(), gates);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::NormalizeModulate(const Matrix& x, const Matrix& mod, int part,
-                                  int prefix) {
-  if (x.cols != 4096 || mod.rows != 2 ||
-      (mod.cols != 4096 && mod.cols != 16384) || part < 0 ||
-      part >= mod.cols / x.cols || prefix < 0 || prefix > x.rows)
-    throw std::logic_error("Qwen-Image normalized modulation shape mismatch");
-  auto out = New(x.rows, x.cols);
-  NormModulation<<<x.rows, 256, 0, stream_>>>(Ptr(x), Ptr(mod), Ptr(out),
-                                              mod.cols, part, prefix);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Modulate(const Matrix& x, const Matrix& mod, int part,
-                         int prefix, const Matrix* residual) {
-  if (mod.rows != 2 || (mod.cols != x.cols && mod.cols != x.cols * 4) ||
-      part < 0 || part >= mod.cols / x.cols || prefix < 0 || prefix > x.rows ||
-      (residual && (residual->rows != x.rows || residual->cols != x.cols)))
-    throw std::logic_error("Qwen-Image modulation shape mismatch");
-  auto out = New(x.rows, x.cols);
-  Modulation<<<Blocks(x.size()), 256, 0, stream_>>>(
-      Ptr(x), Ptr(mod), residual ? Ptr(*residual) : nullptr, Ptr(out), x.rows,
-      x.cols, mod.cols, part, prefix);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Rope(const Matrix& x, int heads, int dim,
-                     const Matrix& frequencies, int mode) {
-  if (x.cols != heads * dim || frequencies.rows != x.rows ||
-      frequencies.cols != dim * 2)
-    throw std::logic_error("rotary shape mismatch");
-  auto out = New(x.rows, x.cols);
-  Rotary<<<Blocks(x.size() / 2), 256, 0, stream_>>>(
-      Ptr(x), Ptr(out), reinterpret_cast<const float*>(frequencies.data),
-      x.rows, heads, dim, mode);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::NormalizeRope(const Matrix& x, const std::string& weight,
-                              int heads, const Matrix& frequencies) {
-  const auto w = Weight(weight + ".weight");
-  if (x.packed || x.cols != heads * 128 || w.size() != 128 ||
-      frequencies.rows != x.rows || frequencies.cols != 256)
-    throw std::logic_error("Qwen-Image normalized rotary shape mismatch");
-  auto out = New(x.rows, x.cols);
-  NormalizeRotary128(x.data, out.data, w.data,
-                     reinterpret_cast<const float*>(frequencies.data), x.rows,
-                     heads, 1e-6F, stream_);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Attention(const Matrix& q, const Matrix& k, const Matrix& v,
-                          int heads, int kv_heads, int dim,
-                          const std::vector<int>& key_limits) {
-  if (q.cols != heads * dim || k.cols != kv_heads * dim || v.cols != k.cols ||
-      v.rows != k.rows || heads % kv_heads ||
-      (!key_limits.empty() &&
-       key_limits.size() != static_cast<std::size_t>(q.rows)))
-    throw std::logic_error("attention shape mismatch");
-  auto qh = New(q.rows, heads * dim), kh = New(k.rows, heads * dim),
-       vh = New(v.rows, heads * dim);
-  auto out = New(q.rows, q.cols);
-  ReorderHeads(q.data, qh.data, q.rows, heads, heads, dim, false, stream_);
-  ReorderHeads(k.data, kh.data, k.rows, heads, kv_heads, dim, false, stream_);
-  ReorderHeads(v.data, vh.data, v.rows, heads, kv_heads, dim, false, stream_);
-  Matrix limits;
-  if (!key_limits.empty()) {
-    for (int n : key_limits)
-      if (n < 1 || n > k.rows)
-        throw std::logic_error("invalid attention key limit");
-    limits = Raw(key_limits.size() * 4);
-    Check(hipMemcpyAsync(limits.data, key_limits.data(), key_limits.size() * 4,
-                         hipMemcpyHostToDevice, stream_));
-    Synchronize();
-  }
-  if (dim == 128 && k.rows >= 512 && q.rows >= 128) {
-    int masked_rows = q.rows;
-    while (!key_limits.empty() && masked_rows > 0 &&
-           key_limits[masked_rows - 1] == k.rows)
-      --masked_rows;
-    // First-step target image rows see every key. Separating this suffix
-    // avoids per-query mask work and keeps short causal prefixes bounded.
-    if (!key_limits.empty() && q.rows - masked_rows >= 128) {
-      if (masked_rows)
-        FusedAttention128(qh.data, kh.data, vh.data, out.data, heads, q.rows,
-                          k.rows, 0, stream_, masked_rows,
-                          reinterpret_cast<const int*>(limits.data));
-      FusedAttention128(qh.data, kh.data, vh.data, out.data, heads, q.rows,
-                        k.rows, masked_rows, stream_, q.rows - masked_rows);
-    } else {
-      FusedAttention128(qh.data, kh.data, vh.data, out.data, heads, q.rows,
-                        k.rows, 0, stream_, q.rows,
-                        reinterpret_cast<const int*>(limits.data));
-    }
-    Check(hipGetLastError());
-    return out;
-  }
-  auto oh = New(q.rows, heads * dim);
-  auto vf = Raw(vh.size() * 4), of = Raw(oh.size() * 4);
-  Bf16ToFloat<<<Blocks(vh.size()), 256, 0, stream_>>>(
-      Ptr(vh), reinterpret_cast<float*>(vf.data), vh.size());
-  const int tile = std::min(128, q.rows);
-  auto scores = Raw(static_cast<std::size_t>(heads) * tile * k.rows * 4);
-  auto probabilities = Raw(static_cast<std::size_t>(heads) * tile * k.rows * 4);
-  const float alpha = 1, beta = 0;
-  for (int start = 0; start < q.rows; start += tile) {
-    const int count = std::min(tile, q.rows - start);
-    if (!gemm_.RunBatched(kh.data,
-                          qh.data + static_cast<std::size_t>(start) * dim,
-                          scores.data, count, k.rows, dim, heads,
-                          static_cast<std::int64_t>(k.rows) * dim,
-                          static_cast<std::int64_t>(q.rows) * dim,
-                          static_cast<std::int64_t>(k.rows) * count, stream_))
-      BlasCheck(hipblasGemmStridedBatchedEx(
-          blas_, HIPBLAS_OP_T, HIPBLAS_OP_N, k.rows, count, dim, &alpha,
-          kh.data, HIP_R_16BF, dim, static_cast<hipblasStride>(k.rows) * dim,
-          qh.data + static_cast<std::size_t>(start) * dim, HIP_R_16BF, dim,
-          static_cast<hipblasStride>(q.rows) * dim, &beta, scores.data,
-          HIP_R_32F, k.rows, static_cast<hipblasStride>(k.rows) * count, heads,
-          HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT));
-    if (k.rows >= 4096 && k.rows <= 4352)
-      SoftmaxCached<17><<<heads * count, 256, 0, stream_>>>(
-          reinterpret_cast<float*>(scores.data),
-          reinterpret_cast<float*>(probabilities.data), k.rows, count, start,
-          reinterpret_cast<int*>(limits.data), 1.0F / std::sqrt(float(dim)));
-    else if (k.rows > 4352 && k.rows <= 8448)
-      SoftmaxCached<33><<<heads * count, 256, 0, stream_>>>(
-          reinterpret_cast<float*>(scores.data),
-          reinterpret_cast<float*>(probabilities.data), k.rows, count, start,
-          reinterpret_cast<int*>(limits.data), 1.0F / std::sqrt(float(dim)));
-    else
-      Softmax<<<heads * count, 256, 0, stream_>>>(
-          reinterpret_cast<float*>(scores.data),
-          reinterpret_cast<float*>(probabilities.data), k.rows, count, start,
-          reinterpret_cast<int*>(limits.data), 1.0F / std::sqrt(float(dim)));
-    BlasCheck(hipblasGemmStridedBatchedEx(
-        blas_, HIPBLAS_OP_N, HIPBLAS_OP_N, dim, count, k.rows, &alpha, vf.data,
-        HIP_R_32F, dim, static_cast<hipblasStride>(k.rows) * dim,
-        probabilities.data, HIP_R_32F, k.rows,
-        static_cast<hipblasStride>(k.rows) * count, &beta,
-        reinterpret_cast<float*>(of.data) +
-            static_cast<std::size_t>(start) * dim,
-        HIP_R_32F, dim, static_cast<hipblasStride>(q.rows) * dim, heads,
-        HIPBLAS_COMPUTE_32F, HIPBLAS_GEMM_DEFAULT));
-  }
-  FloatToBf16<<<Blocks(oh.size()), 256, 0, stream_>>>(
-      reinterpret_cast<const float*>(of.data), Ptr(oh), oh.size());
-  ReorderHeads(oh.data, out.data, q.rows, heads, heads, dim, true, stream_);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Concat(std::span<const Matrix> matrices) {
-  if (matrices.empty())
-    throw std::logic_error("empty tensor concatenation");
-  int rows = 0;
-  for (const auto& m : matrices) {
-    if (m.cols != matrices[0].cols)
-      throw std::logic_error("concat shape");
-    rows += m.rows;
-  }
-  auto out = New(rows, matrices[0].cols);
-  std::size_t offset = 0;
-  for (const auto& m : matrices) {
-    Check(hipMemcpyAsync(out.data + offset, m.data, m.size() * 2,
-                         hipMemcpyDeviceToDevice, stream_));
-    offset += m.size();
-  }
-  return out;
-}
-
-Matrix Runtime::Columns(const Matrix& x, int start, int count) {
-  if (start < 0 || count <= 0 || start > x.cols - count)
-    throw std::logic_error("column slice");
-  auto out = New(x.rows, count);
-  CopyColumns<<<Blocks(out.size()), 256, 0, stream_>>>(Ptr(x), Ptr(out), x.rows,
-                                                       x.cols, start, count);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Embed(const Matrix& weights,
-                      std::span<const std::uint32_t> ids) {
-  for (auto id : ids)
-    if (id >= static_cast<unsigned>(weights.rows))
-      throw std::logic_error("token ID range");
-  auto indices = Raw(ids.size() * 4);
-  Check(hipMemcpyAsync(indices.data, ids.data(), ids.size() * 4,
-                       hipMemcpyHostToDevice, stream_));
-  Synchronize();
-  auto out = New(static_cast<int>(ids.size()), weights.cols);
-  Embedding<<<Blocks(out.size()), 256, 0, stream_>>>(
-      Ptr(weights), Ptr(out), reinterpret_cast<std::uint32_t*>(indices.data),
-      out.rows, out.cols);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::ReplaceRows(const Matrix& x, const Matrix& values,
-                            std::span<const int> positions, bool add) {
-  if (values.rows != static_cast<int>(positions.size()) ||
-      values.cols != x.cols)
-    throw std::logic_error("image scatter shape");
-  for (int i : positions)
-    if (i < 0 || i >= x.rows)
-      throw std::logic_error("image scatter index");
-  auto indices = Raw(positions.size() * 4);
-  Check(hipMemcpyAsync(indices.data, positions.data(), positions.size() * 4,
-                       hipMemcpyHostToDevice, stream_));
-  Synchronize();
-  auto out = New(x.rows, x.cols);
-  Check(hipMemcpyAsync(out.data, x.data, x.size() * 2, hipMemcpyDeviceToDevice,
-                       stream_));
-  Scatter<<<Blocks(values.size()), 256, 0, stream_>>>(
-      Ptr(values), Ptr(out), reinterpret_cast<int*>(indices.data), values.rows,
-      values.cols, add);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Conv(const Matrix& x, int height, int width,
-                     const std::string& name, int stride, int padding,
-                     int upscale) {
-  const auto& spec = weights_.Get(name + ".weight");
-  if (spec.shape.size() != 4 || spec.shape[1] != x.cols ||
-      spec.shape[2] != spec.shape[3] || x.rows != height * width)
-    throw std::logic_error("convolution shape: " + name);
-  const int kernel = spec.shape[2];
-  const int total_padding = padding == -1 ? 1 : 2 * padding;
-  const int out_height =
-      (height * upscale + total_padding - kernel) / stride + 1;
-  const int out_width = (width * upscale + total_padding - kernel) / stride + 1;
-  auto out = New(out_height * out_width, spec.shape[0]);
-  const auto w = Weight(name + ".weight");
-  Matrix bias;
-  if (weights_.Contains(name + ".bias"))
-    bias = Weight(name + ".bias");
-  if (w.packed) {
-    if (kernel != 3 ||
-        !Convolve3(x.data, w.data, bias.data, out.data, height, width, x.cols,
-                   out.cols, stream_, stride, padding, upscale))
-      throw std::logic_error("unsupported Qwen-Image packed convolution");
-    Check(hipGetLastError());
-    return out;
-  }
-  constexpr int tile = 1024;
-  auto col = New(std::min(tile, out.rows), w.cols);
-  for (int start = 0; start < out.rows; start += tile) {
-    const int count = std::min(tile, out.rows - start);
-    auto input = col.Slice(0, count);
-    auto output = out.Slice(start, count);
-    if (kernel != 3 ||
-        !ExpandConvolution3(x.data, input.data, height, width, x.cols, stride,
-                            std::max(0, padding), upscale, out_width, start,
-                            count, stream_))
-      Im2col<<<Blocks(input.size()), 256, 0, stream_>>>(
-          Ptr(x), Ptr(input), height, width, x.cols, kernel, stride,
-          std::max(0, padding), upscale, out_width, start, count);
-    Matmul(input, w, output, bias.data ? &bias : nullptr, true);
-  }
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::DownShortcut(const Matrix& x, int height, int width,
-                             int out_channels, int temporal, int spatial) {
-  auto out = New((height / spatial) * (width / spatial), out_channels);
-  Shortcut<<<Blocks(out.size()), 256, 0, stream_>>>(Ptr(x), Ptr(out), height,
-                                                    width, x.cols, out_channels,
-                                                    temporal, spatial, false);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::UpShortcut(const Matrix& x, int height, int width,
-                           int out_channels, int temporal) {
-  auto out = New(height * width * 4, out_channels);
-  Shortcut<<<Blocks(out.size()), 256, 0, stream_>>>(
-      Ptr(x), Ptr(out), height, width, x.cols, out_channels, temporal, 2, true);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::Euler(const Matrix& x, const Matrix& velocity, float dt) {
-  auto out = New(x.rows, x.cols);
-  Elementwise<<<Blocks(out.size()), 256, 0, stream_>>>(
-      Ptr(x), Ptr(velocity), Ptr(out), out.size(), 6, dt);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::LatentScale(const Matrix& x, std::span<const float> mean,
-                            std::span<const float> stddev, bool encode) {
-  auto m = Upload(mean, 1, 64), s = Upload(stddev, 1, 64);
-  auto out = New(x.rows, x.cols);
-  ScaleLatents<<<Blocks(out.size()), 256, 0, stream_>>>(
-      Ptr(x), Ptr(out), Ptr(m), Ptr(s), out.size(), encode);
-  Check(hipGetLastError());
-  return out;
-}
-
-Matrix Runtime::VisionPosition(const Matrix& x, int height, int width) {
-  const auto w = Weight("text_encoder.model.visual.pos_embed.weight");
-  if (x.cols != 1152 || x.rows != height * width || w.rows != 2304 ||
-      w.cols != 1152)
-    throw std::logic_error("Qwen-Image vision position shape mismatch");
-  auto out = New(x.rows, x.cols);
-  Position<<<Blocks(out.size()), 256, 0, stream_>>>(Ptr(x), Ptr(w), Ptr(out),
-                                                    height, width);
-  Check(hipGetLastError());
-  return out;
-}
-
-std::vector<float> Runtime::Download(const Matrix& matrix) {
-  auto tmp = Raw(matrix.size() * 4);
-  Bf16ToFloat<<<Blocks(matrix.size()), 256, 0, stream_>>>(
-      Ptr(matrix), reinterpret_cast<float*>(tmp.data), matrix.size());
-  std::vector<float> result(matrix.size());
-  Check(hipMemcpyAsync(result.data(), tmp.data, result.size() * 4,
-                       hipMemcpyDeviceToHost, stream_));
-  Synchronize();
-  return result;
-}
-
-void Runtime::Observe(const Observer& observer, std::string_view name,
-                      const Matrix& matrix) {
-  if (observer.Wants(name))
-    observer.write(name, Download(matrix), matrix.rows, matrix.cols);
-}
-
-void Runtime::Synchronize() {
-  Check(hipStreamSynchronize(stream_));
+void LaunchVisionPosition(const void* input, const void* table, void* output,
+                          std::uint32_t height, std::uint32_t width,
+                          hipStream_t stream) {
+  Position<<<Blocks(static_cast<std::size_t>(height) * width * 1152), 256, 0,
+             stream>>>(static_cast<const B*>(input),
+                       static_cast<const B*>(table), static_cast<B*>(output),
+                       static_cast<int>(height), static_cast<int>(width));
 }
 
 }  // namespace gufo::models::qwen_image_21::hip

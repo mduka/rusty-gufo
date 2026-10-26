@@ -863,54 +863,6 @@ static int ds4_attn_pack_rope_eligible(const ds4_attn_pack_rope *rope,
     return 1;
 }
 
-static void hip_launch_attention_pack_group_heads_f16(
-        __half *dst,
-        const float *heads,
-        uint32_t n_tokens,
-        uint32_t n_groups,
-        uint32_t group_dim,
-        uint64_t count) {
-    if (count == 0u) return;
-    if ((group_dim & 3u) == 0u &&
-        ((uintptr_t)heads & 15u) == 0u &&
-        ((uintptr_t)dst & 7u) == 0u) {
-        const uint64_t groups4 = count >> 2u;
-        attention_pack_group_heads_f16_vec4_kernel<<<
-                (uint32_t)((groups4 + 255u) / 256u), 256>>>(
-                dst, heads, n_tokens, n_groups, group_dim);
-        return;
-    }
-    attention_pack_group_heads_f16_kernel<<<
-            (uint32_t)((count + 255u) / 256u), 256>>>(
-            dst, heads, n_tokens, n_groups, group_dim);
-}
-
-/* Returns 0 when the fused form is unavailable, so the caller keeps the
- * separate rope_tail launch plus the plain pack. */
-static int hip_launch_attention_pack_group_heads_rope_f16(
-        __half *dst,
-        const float *heads,
-        uint32_t n_tokens,
-        uint32_t n_groups,
-        uint32_t group_dim,
-        uint64_t count,
-        const ds4_attn_pack_rope *rope) {
-    if (count == 0u) return 0;
-    if (!ds4_attn_pack_rope_eligible(rope, group_dim)) return 0;
-    if ((group_dim & 3u) != 0u ||
-        ((uintptr_t)heads & 15u) != 0u || ((uintptr_t)dst & 7u) != 0u) {
-        return 0;
-    }
-    const uint64_t groups4 = count >> 2u;
-    attention_pack_group_heads_rope_f16_vec4_kernel<<<
-            (uint32_t)((groups4 + 255u) / 256u), 256>>>(
-            dst, heads, n_tokens, n_groups, group_dim, rope->head_dim,
-            rope->n_rot, rope->pos0, rope->n_ctx_orig, rope->inverse,
-            rope->freq_base, rope->freq_scale, rope->ext_factor,
-            rope->attn_factor, rope->beta_fast, rope->beta_slow);
-    return 1;
-}
-
 __global__ static void attention_unpack_group_low_kernel(
         float *low,
         const float *tmp,

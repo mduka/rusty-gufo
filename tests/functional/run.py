@@ -84,11 +84,16 @@ def provenance():
     source = hashlib.sha256()
     for path in harness_files():
         source.update(path.read_bytes())
-    lock = TESTS.parents[1] / "flake.lock"
+    # The binary's pinned build inputs: Cargo's lock, the Rust toolchain and the
+    # development shell's lock. The host ROCm it builds against is not hashed.
+    build_inputs = hashlib.sha256()
+    for name in ("flake.lock", "Cargo.lock", "rust-toolchain.toml"):
+        data = (TESTS.parents[1] / name).read_bytes()
+        build_inputs.update(f"{name}\0{len(data)}\0".encode() + data)
     kernel_command = Path("/proc/cmdline")
     return {
         "harness_sha256": source.hexdigest(),
-        "build_inputs_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+        "build_inputs_sha256": build_inputs.hexdigest(),
         "environment": {"host": platform.node(), "kernel": platform.release(),
                         "kernel_command_line": (kernel_command.read_text().strip()
                                                 if kernel_command.is_file() else None), **{
@@ -266,7 +271,7 @@ def main():
     parser.add_argument("--allow-missing-progress", action="store_true",
                         help="Baseline only: older revisions without progress events")
     parser.add_argument("command", nargs=argparse.REMAINDER,
-                        help="-- ./result/bin/gufo serve llm --model PATH [server options]")
+                        help="-- target/release/gufo serve llm --model PATH [server options]")
     args = parser.parse_args()
     if not math.isfinite(args.request_timeout) or args.request_timeout <= 0:
         parser.error("--request-timeout must be finite and positive")
