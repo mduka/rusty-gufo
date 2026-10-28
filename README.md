@@ -1,18 +1,29 @@
-# Gufo: The ***Open Source*** Strix Halo AI engine 
+# Gufo in Rust: the ***Open Source*** Strix Halo AI engine
 
 <p align="center">
   <img src="assets/gufo-logo.jpg" alt="Gufo logo" width="180">
 </p>
 
+> [!NOTE]
+> **This fork ports Gufo's host code to Rust.** It is [Gufo](https://github.com/gufo-org/gufo)
+> release [v0.23.0](https://github.com/gufo-org/gufo/releases/tag/v0.23.0) with the C++
+> engines, server, CLI and HIP resource management rewritten in Rust. The GPU kernels are
+> upstream's HIP code, unchanged but for upstream's open bounds fix
+> [#849](https://github.com/gufo-org/gufo/pull/849). Outputs equal the C++ build's bit for bit
+> on its deterministic paths, and speed, load time and memory are measured against it on
+> ROCm 10.1 ([Gufo in Rust](docs/RUST.md)). The fork also adds
+> [`gufo arbiter`](docs/ARBITER.md), with which servers share one GPU so that streamed speech
+> stays in real time while a language model generates. Not ported: MiniMax H3 and Windows.
+> The port is proposed to upstream; until then it follows upstream releases here.
+
 Gufo is a vertical local inference engine specifically built and optimized for the AMD Strix Halo hardware:
 Ryzen AI MAX+ 395 systems with Radeon 8060S (`gfx1151`), up to 128 GiB of unified memory.
-Its host code is Rust and its GPU kernels are HIP; [Gufo in Rust](docs/RUST.md)
-describes the workspace, its safety checks and how it compares with the C++ engine.
 
 **Contributions are welcome!**
 
-See the [changelog](CHANGELOG.md) and [GitHub Releases](https://github.com/gufo-org/gufo/releases)
-for user-facing changes and release history.
+Upstream's [changelog](CHANGELOG.md) and [GitHub Releases](https://github.com/gufo-org/gufo/releases)
+record the release history up to v0.23.0; [Gufo in Rust](docs/RUST.md#differences-from-upstream)
+lists where this port differs.
 
 > [!TIP]
 > There are two Gufo variants that haven't been merged yet: A **[Windows port](https://github.com/pixmaate/gufo)** and **[Gufo RDMA for Dual Strix Halo](https://github.com/neuhaus/gufo)**. Check them out!
@@ -36,15 +47,18 @@ named speculative mode. Peaks include repetitive output; aggregate tg sums
 individual request decode rates. Qwen27B's single-user peak uses the short-prompt
 C1 workload. Audio excludes loading.
 Each model guide lists the required files and complete benchmark settings.
+The figures are upstream's, measured with its C++ build;
+[Gufo in Rust](docs/RUST.md#performance-against-upstream) compares this build with it.
 
 ## Several servers on one GPU
 
 A voice assistant runs a language model, speech synthesis and recognition
 side by side, and on one GPU the language model takes the device: streamed
-speech stutters although the text arrives far ahead of it. `gufo arbiter`
-keeps speech in real time. Servers started with `--arbiter` report to it;
-text generation yields the GPU while a streamed TTS falls behind and runs at
-full speed otherwise. See [sharing the GPU](docs/ARBITER.md).
+speech stutters although the text arrives far ahead of it. `gufo arbiter`,
+which this fork adds, keeps speech in real time. Servers started with
+`--arbiter` report to it; text generation yields the GPU while a streamed
+TTS falls behind and runs at full speed otherwise. See
+[sharing the GPU](docs/ARBITER.md).
 
 ## Philosophy
 
