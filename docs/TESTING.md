@@ -71,8 +71,11 @@ existing copy.
 Hosted runners have neither a gfx1151 nor the ROCm the binary links, so
 hosted CI ([ci.yml](../.github/workflows/ci.yml)) runs only what needs
 neither: rustfmt, the unsafe policy, the tool tests, the functional planner,
-runner and cache-workload tests, the documentation and dependency inventory
-and clang-format. The gate runs on the development host and covers formatting,
+runner and cache-workload tests, the documentation and dependency inventory,
+clang-format, the dependency policy of [`deny.toml`](../deny.toml)
+(`cargo deny`: advisories, licences, duplicate versions, sources), and
+clippy and the tests of the crates that link no ROCm library (`gufo-core`,
+`gufo-eval`, `gufo-formats`, `gufo-kernel-build`, `gufo-serve`). The gate runs on the development host and covers formatting,
 clippy, the GPU and model tests of the packages a change reaches (all of
 them with `--full`), the kernel extent probes, the DeepSeek operator checks
 when their kernels change, the unsafe policy, the tool tests (A/B harness,

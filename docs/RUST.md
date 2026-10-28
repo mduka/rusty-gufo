@@ -231,8 +231,10 @@ tests, the CLI parser, kernel scratch against
 checks. `tools/ci/gate_scope.py` maps each changed file to the packages it
 reaches (through Cargo's and `hipcc`'s dependency records); `--full` runs
 every test and is required after shared or environment changes. Hosted CI
-runs only what needs neither ROCm nor a gfx1151. Details, test features and
-the local artifacts some tests read are in [testing](TESTING.md).
+runs only what needs neither ROCm nor a gfx1151, including clippy and the
+tests of the crates that link no ROCm library and `cargo deny`. Details,
+test features and the local artifacts some tests read are in
+[testing](TESTING.md).
 
 On ROCm 10.1 two of upstream's DeepSeek operator checks fail, for its C++
 build as for this one: they are standalone HIP programs, built with
@@ -455,9 +457,9 @@ not the runtime it loads; check that with `ldd`.
   the whole device (not during a graph capture). Swapping models at run time
   would need it to wait for the tensor's actual users instead.
 - **Dependencies:** `tools/ci/check-dependencies.py` checks the crate
-  inventory against [third-party notices](../THIRD_PARTY_NOTICES.md); a
-  dependency budget (`cargo deny`) and generated crate licences
-  (`cargo-about`) are open.
+  inventory against [third-party notices](../THIRD_PARTY_NOTICES.md) and
+  hosted CI the policy of [`deny.toml`](../deny.toml); generated crate
+  licences (`cargo-about`) are open.
 - **Responses reasoning:** `--responses-reasoning-target` picks one target.
   Several at once, none (which needs `encrypted_content` for tool loops) and
   generated summaries for `reasoning.summary` are ideas.

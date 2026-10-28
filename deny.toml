@@ -1,0 +1,35 @@
+# Dependency policy of the Linux x86-64 build, checked by `cargo deny check`
+# in CI's repository checks: advisories, licences, duplicate versions and
+# sources. tools/ci/check-dependencies.py keeps the inventory of
+# THIRD_PARTY_NOTICES.md.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

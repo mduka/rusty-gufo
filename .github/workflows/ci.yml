@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, rust-port ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, rust-port ]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -12,8 +12,8 @@ concurrency:
 
 jobs:
   repository-checks:
-    # Hosted runners have neither ROCm nor a gfx1151: clippy and the Cargo
-    # tests run in tools/ci/check-rust.sh on the development host.
+    # Hosted runners have neither ROCm nor a gfx1151: the GPU and model crates
+    # build and test in tools/ci/check-rust.sh on the development host.
     name: Repository checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -63,3 +63,29 @@ jobs:
 
       - name: Formatting of the hand-written C++
         run: nix shell --inputs-from . nixpkgs#clang-tools -c python3 tools/ci/check-format.py
+
+      # Advisories, licences, duplicate versions and sources (deny.toml); the
+      # advisory database is fetched on every run.
+      - name: Dependency policy
+        run: nix shell --inputs-from . nixpkgs#cargo-deny -c cargo deny --locked check
+
+  host-crates:
+    # The crates that link no ROCm library: GGUF, tokenizers, sampling, the
+    # server and its scheduler, evaluation and the kernel build's generator.
+    name: Host crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CRATES: -p gufo-core -p gufo-eval -p gufo-formats -p gufo-kernel-build -p gufo-serve
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Clippy
+        run: cargo clippy $CRATES --all-targets --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test $CRATES --locked
