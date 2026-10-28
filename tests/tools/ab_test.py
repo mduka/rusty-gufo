@@ -174,10 +174,21 @@ signal.signal(signal.SIGINT, stop)
 server.serve_forever()
 """
 
+# The fake servers' requests are real sleeps of milliseconds and their load
+# time is Python's start, so on a busy machine (a hosted runner) both vary by
+# tens of percent. Runs of equal sides check measuring, comparing and
+# recording, with tolerances no such noise reaches; a slower candidate sleeps
+# three times as long.
+EQUAL_SIDES = ("--tolerance", "10", "--load-tolerance", "10")
+# Millisecond requests: scheduling noise exceeds the default 0.5 %.
+SLOWER_SIDES = ("--tolerance", "0.2")
+SLOWER = "3"
+
 
 class AbTest(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.log = self.dir / "order.log"
         device = self.dir / "sys/class/drm/card0/device"
         device.mkdir(parents=True)
@@ -237,7 +248,8 @@ class AbTest(unittest.TestCase):
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
         return path
 
-    def run_serve(self, baseline: Path, candidate: Path) -> tuple[int, dict | None]:
+    def run_serve(self, baseline: Path, candidate: Path,
+                  timing: tuple[str, ...] = SLOWER_SIDES) -> tuple[int, dict | None]:
         import socket
 
         with socket.socket() as probe:
@@ -246,16 +258,14 @@ class AbTest(unittest.TestCase):
         output = self.dir / "serve.json"
         output.unlink(missing_ok=True)
         argv = ["--baseline", str(baseline), "--candidate", str(candidate), "--rounds", "4", "--repeat", "2",
-                "--output", str(output), *self.counters,
-                # Millisecond requests: scheduling noise exceeds the default 0.5 %.
-                "--tolerance", "0.2",
+                "--output", str(output), *self.counters, *timing,
                 "serve", "--model", "m.gguf", "--concurrency", "1,2", "--port", str(port),
                 "--server-args", "--speculative dflash2"]
         code = ab.main(argv)
         return code, json.loads(output.read_text()) if output.exists() else None
 
     def test_serve_judges_latency_and_throughput_per_level(self) -> None:
-        code, report = self.run_serve(self.fake_server("A"), self.fake_server("B"))
+        code, report = self.run_serve(self.fake_server("A"), self.fake_server("B"), EQUAL_SIDES)
         self.assertEqual(code, 0)
         self.assertEqual(self.log.read_text().split(), ["A", "B"] + ["A", "B", "B", "A", "A", "B", "B", "A"])
         self.assertEqual(report["workload"]["arguments"][:4], ["serve", "llm", "--model", "m.gguf"])
@@ -265,11 +275,12 @@ class AbTest(unittest.TestCase):
                           "decode_ms_per_token"])
         self.assertEqual(len(report["identity"]["completions"]), 2)
         self.assertAlmostEqual(report["peak_memory_bytes"]["A"]["median"], 1e9, delta=1024)
-        code, report = self.run_serve(self.fake_server("A"), self.fake_server("B", FAKE_SCALE="1.5"))
+        code, report = self.run_serve(self.fake_server("A"), self.fake_server("B", FAKE_SCALE=SLOWER))
         self.assertEqual(code, 1)
         self.assertFalse(report["verdict"]["stages"]["c2_ms_per_output_token"]["pass"])
 
-    def run_tts(self, baseline: Path, candidate: Path) -> tuple[int, dict | None]:
+    def run_tts(self, baseline: Path, candidate: Path,
+                timing: tuple[str, ...] = SLOWER_SIDES) -> tuple[int, dict | None]:
         import socket
 
         with socket.socket() as probe:
@@ -278,19 +289,19 @@ class AbTest(unittest.TestCase):
         output = self.dir / "tts.json"
         output.unlink(missing_ok=True)
         argv = ["--baseline", str(baseline), "--candidate", str(candidate), "--rounds", "4", "--repeat", "2",
-                "--output", str(output), *self.counters, "--tolerance", "0.2",
+                "--output", str(output), *self.counters, *timing,
                 "tts", "--model", "voice", "--port", str(port), "--voice", "",
                 "--request", '{"instructions": "calm"}']
         code = ab.main(argv)
         return code, json.loads(output.read_text()) if output.exists() else None
 
     def test_tts_judges_requests_and_first_audio(self) -> None:
-        code, report = self.run_tts(self.fake_server("A"), self.fake_server("B"))
+        code, report = self.run_tts(self.fake_server("A"), self.fake_server("B"), EQUAL_SIDES)
         self.assertEqual(code, 0)
         self.assertEqual(report["workload"]["arguments"][:4], ["serve", "tts", "--model", "voice"])
         self.assertEqual(sorted(report["verdict"]["stages"]), ["first_audio_ms", "streamed_ms"])
         self.assertEqual(sorted(report["identity"]), ["pcm_sha256", "wav_sha256"])
-        code, report = self.run_tts(self.fake_server("A"), self.fake_server("B", FAKE_SCALE="1.5"))
+        code, report = self.run_tts(self.fake_server("A"), self.fake_server("B", FAKE_SCALE=SLOWER))
         self.assertEqual(code, 1)
         self.assertFalse(report["verdict"]["request"]["pass"])
 
@@ -298,7 +309,8 @@ class AbTest(unittest.TestCase):
         code, report = self.run_tts(self.fake_server("A"), self.fake_server("B", FAKE_TEXT="x"))
         self.assertEqual((code, report), (2, None))
 
-    def run_image(self, baseline: Path, candidate: Path, *extra: str) -> tuple[int, dict | None]:
+    def run_image(self, baseline: Path, candidate: Path, *extra: str,
+                  timing: tuple[str, ...] = SLOWER_SIDES) -> tuple[int, dict | None]:
         import socket
 
         with socket.socket() as probe:
@@ -307,25 +319,26 @@ class AbTest(unittest.TestCase):
         output = self.dir / "image.json"
         output.unlink(missing_ok=True)
         argv = ["--baseline", str(baseline), "--candidate", str(candidate), "--rounds", "4", "--repeat", "2",
-                "--output", str(output), *self.counters, "--tolerance", "0.2",
+                "--output", str(output), *self.counters, *timing,
                 "image", "--model", "qwen-image", "--port", str(port), "--size", "256x256", *extra]
         code = ab.main(argv)
         return code, json.loads(output.read_text()) if output.exists() else None
 
     def test_image_judges_requests_and_server_stages(self) -> None:
-        code, report = self.run_image(self.fake_server("A"), self.fake_server("B"))
+        code, report = self.run_image(self.fake_server("A"), self.fake_server("B"), timing=EQUAL_SIDES)
         self.assertEqual(code, 0)
         self.assertEqual(report["workload"]["arguments"][:4], ["serve", "image", "--model", "qwen-image"])
         self.assertEqual(sorted(report["verdict"]["stages"]), ["denoise_ms", "prompt_ms", "vae_ms"])
         self.assertEqual(sorted(report["identity"]), ["rgba_sha256"])
-        code, report = self.run_image(self.fake_server("A"), self.fake_server("B", FAKE_SCALE="1.5"))
+        code, report = self.run_image(self.fake_server("A"), self.fake_server("B", FAKE_SCALE=SLOWER))
         self.assertEqual(code, 1)
         self.assertFalse(report["verdict"]["stages"]["denoise_ms"]["pass"])
 
     def test_image_edits_post_multipart_and_abort_on_other_pixels(self) -> None:
         reference = self.dir / "reference.png"
         reference.write_bytes(b"fake")
-        code, _ = self.run_image(self.fake_server("A"), self.fake_server("B"), "--edit", str(reference))
+        code, _ = self.run_image(self.fake_server("A"), self.fake_server("B"), "--edit", str(reference),
+                                 timing=EQUAL_SIDES)
         self.assertEqual(code, 0)
         code, report = self.run_image(self.fake_server("A"), self.fake_server("B", FAKE_TEXT="x"))
         self.assertEqual((code, report), (2, None))
