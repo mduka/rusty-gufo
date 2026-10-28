@@ -162,6 +162,9 @@ pub struct FlashNextState {
     position: usize,
     /// `Invalidate` resets the device state before the next use.
     reset_pending: bool,
+    /// The pending reset keeps the MTP scratch and graphs: the session was
+    /// healthy when the cache reassigned it.
+    reuse_mtp: bool,
     /// False for an `ignore_eos` request.
     stop_at_eos: bool,
 }
@@ -187,6 +190,11 @@ impl TextRunnerSnapshot for FlashNextSnapshot {
 impl text::TextRunnerState for FlashNextState {
     fn invalidate(&mut self) {
         self.session.set_cancellation_check(None);
+        // A healthy slot is reassigned without rebuilding its MTP graphs
+        // (`ContinuationAdapter::Invalidate`).
+        if !self.reset_pending {
+            self.reuse_mtp = self.session.is_valid();
+        }
         self.reset_pending = true;
         self.position = 0;
     }
@@ -325,7 +333,11 @@ impl FlashNextRunner {
     /// Resets an invalidated state before it runs again.
     fn ready(&self, model: &mut Model, state: &mut FlashNextState) {
         if std::mem::take(&mut state.reset_pending) {
-            model.reset(&mut state.session);
+            if std::mem::take(&mut state.reuse_mtp) {
+                model.reset_reusing_mtp(&mut state.session);
+            } else {
+                model.reset(&mut state.session);
+            }
         }
     }
 
@@ -493,6 +505,7 @@ impl TextModelRunner for FlashNextRunner {
             session,
             position: 0,
             reset_pending: false,
+            reuse_mtp: false,
             stop_at_eos: true,
         })
     }

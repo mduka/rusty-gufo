@@ -370,22 +370,26 @@ one of two causes that are not Rust's:
 - **Load time.** Loads of the large models take about 20 or 24 s on both
   sides, from round to round, so the intervals reach +10 to +50%.
 
-The build in this tree adds two changes to the measured one: the bench
-waits for the reset before a timed prefill, as C++'s `restore_depth` does,
-and Flash-Next's rollback rows, verification scratch and batch logits are
-exact allocations, as C++'s `AllocateDevice`. Run again with them,
-q27-q8-ar passes (pp +0.21, −0.50 and −0.31%) and fn-mtp is unchanged.
-Where Rust is slower:
+The build in this tree adds changes to the measured one, each as C++ does
+it: the bench waits for the reset before a timed prefill (`restore_depth`);
+Flash-Next's rollback rows, verification scratch and batch logits are exact
+allocations (`AllocateDevice`); a warmed decode shape's first graph is
+recorded while its pass already runs, instead of captured and then
+launched with the GPU idle (`Run`); and a healthy server slot keeps its MTP
+rollback rows and graphs when the continuation cache reassigns it
+(`ResetImpl`). Run again with them, q27-q8-ar passes (pp +0.21, −0.50 and
+−0.31%), and Flash-Next decoding with MTP, which the idle captures had
+slowed (Rust 18.84 against C++ 18.58 ms per token in its fast rounds),
+takes 18.53 ms: −2.3% against the previous build and −0.9% against the
+C++ baseline. When serving, it decodes at 19.83 ms per token against 19.84
+to 19.90 in C++'s fast rounds measured alongside, and output at concurrency
+4 is 1% faster. Where Rust is slower:
 
-- **Flash-Next decoding with MTP:** +0.8% in the bench, +1.5% when
-  serving, and the first token 2.5 to 3.6% later. The kernels take the same
-  time; the GPU waits instead. A verification graph is captured at the
-  second use of each new row count (five times in 128 tokens), and Rust
-  captures it with nothing queued on the GPU, which then idles for the
-  2.5 to 6 ms of the capture; C++ captures the same graphs at the same
-  steps while about 2.5 ms of the step's work still runs. The C++ rounds
-  also take a slower time (19.5 against 18.6 ms per token) in the rounds
-  whose load is slow; every Rust round takes 18.84 ms.
+- **Flash-Next serving with MTP, first token:** 509 to 515 ms against 500 to
+  504 ms for C++ measured alongside (+2%). Rust keeps each request's prompt
+  snapshot on the device, where the stream pool maps new memory while the
+  continuation cache fills (about 22 ms per request on ROCm 10.0); C++
+  copies snapshots into host memory it reserves at load.
 - **27B serving at concurrency 4:** +0.33 and +0.46%, as under ROCm 10.0
   in alternating rounds (+0.34%), so not only the run order.
 - **Embedding:** one request takes 8.43 against 8.31 ms (+1.5%); the cause

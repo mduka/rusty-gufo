@@ -627,6 +627,71 @@ fn pre_launch_order(policy: MismatchPolicy, replay: [&str; 2]) {
     );
 }
 
+/// An overlapped capture enqueues the pass, restores the dispatch state the
+/// pass started from and records the same launches without launching them;
+/// later runs replay the graph.
+#[test]
+fn an_overlapped_capture_records_after_the_pass() {
+    let stream = Stream::new().unwrap();
+    let blas = Blas::new(&stream).unwrap();
+    let mut out = stream.alloc::<f32>(5 * 64).unwrap();
+    let mut graphs = GraphCache::new().with_validation(true);
+    // The projection, the log, and a dispatch counter the body advances.
+    let mut context = (Projection::new(&stream, 5, 64, 128), Vec::new(), 0u32);
+    let mut runs = Vec::new();
+    for step in 0..4 {
+        let run = graphs
+            .run_overlapped(
+                &stream,
+                0,
+                &mut context,
+                |(p, log, dispatch), s| {
+                    log.push(format!("body {dispatch}"));
+                    *dispatch += 1;
+                    blas.gemm(
+                        s,
+                        Op::T,
+                        Op::N,
+                        p.m,
+                        p.batch,
+                        p.k,
+                        p.weights.as_slice(),
+                        p.k,
+                        p.input.as_slice(),
+                        p.k,
+                        out.as_mut_slice(),
+                        p.m,
+                    )
+                },
+                |(p, log, _)| {
+                    log.push("before".to_string());
+                    p.set_input(&stream, 100 + step);
+                    Ok(())
+                },
+                |(_, _, dispatch)| *dispatch,
+                |(_, log, dispatch), saved| {
+                    log.push("restore".to_string());
+                    *dispatch = saved;
+                },
+            )
+            .unwrap();
+        runs.push(run);
+        context.0.check(&host(&stream, &out));
+        context.2 = 0;
+    }
+    use GraphRun::*;
+    assert_eq!(runs, [Eager, Captured, Replayed, Replayed]);
+    assert_eq!(
+        context.1,
+        [
+            "before", "body 0", // eager first run
+            "before", "body 0", "restore", "body 0", // pass, then its recording
+            "before", "body 0", // replay, validated after its launch
+            "before", "body 0",
+        ]
+    );
+}
+
 #[test]
 fn planning_is_refused_while_a_graph_is_recorded() {
     let stream = Stream::new().unwrap();

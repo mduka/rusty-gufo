@@ -142,9 +142,20 @@ impl Model {
 
     /// Drops every token; the next sync starts at position 0.
     pub fn reset(&mut self, s: &mut Session) {
+        self.reset_session(s, false);
+    }
+
+    /// [`reset`](Self::reset) of a healthy session the continuation cache
+    /// reassigns: an MTP session keeps its verification scratch and graphs
+    /// (`ResetImpl(true)`).
+    pub fn reset_reusing_mtp(&mut self, s: &mut Session) {
+        self.reset_session(s, true);
+    }
+
+    fn reset_session(&mut self, s: &mut Session, reuse_mtp: bool) {
         s.valid = false;
         s.anchor_hint = None;
-        let reset = s.native.reset(self.executor.stream());
+        let reset = s.native.reset(self.executor.stream(), reuse_mtp);
         s.tokens.clear();
         s.draft_vocab_stale = true;
         s.lookup.clear();

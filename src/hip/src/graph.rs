@@ -326,8 +326,62 @@ impl<K: Eq + Hash> GraphCache<K> {
         F: FnMut(&mut C, &Stream) -> Result<(), LaunchError>,
         P: FnOnce(&mut C) -> Result<(), LaunchError>,
     {
-        let mut bound = |s: &Stream| body(context, s);
-        let action = match self.entries.get(&key) {
+        let action = self.action(stream, &key, &mut |s: &Stream| body(context, s))?;
+        before_launch(context)?;
+        self.perform(stream, key, action, &mut |s: &Stream| body(context, s))
+    }
+
+    /// [`run_with`](Self::run_with), except that a capture first runs the
+    /// body as an eager pass and then records the same launches while the
+    /// device executes them, without launching the graph (upstream `Run` for
+    /// a warmed shape): the instantiation overlaps the pass instead of
+    /// leaving the device idle. `save` and `restore` return the context's
+    /// dispatch state to where the eager pass found it, so the recorded
+    /// launches are the executed ones.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_overlapped<C, S, F, P>(
+        &mut self,
+        stream: &Stream,
+        key: K,
+        context: &mut C,
+        mut body: F,
+        before_launch: P,
+        save: impl FnOnce(&C) -> S,
+        restore: impl FnOnce(&mut C, S),
+    ) -> Result<GraphRun, LaunchError>
+    where
+        F: FnMut(&mut C, &Stream) -> Result<(), LaunchError>,
+        P: FnOnce(&mut C) -> Result<(), LaunchError>,
+    {
+        let action = self.action(stream, &key, &mut |s: &Stream| body(context, s))?;
+        before_launch(context)?;
+        match action {
+            Action::Capture {
+                run,
+                after_mismatch,
+            } => {
+                let saved = save(context);
+                body(context, stream)?;
+                restore(context, saved);
+                self.record(
+                    stream,
+                    key,
+                    &mut |s: &Stream| body(context, s),
+                    run,
+                    after_mismatch,
+                )
+            }
+            action => self.perform(stream, key, action, &mut |s: &Stream| body(context, s)),
+        }
+    }
+
+    /// What a run of `key` does, validating a replay first under
+    /// [`MismatchPolicy::Recapture`].
+    fn action<F>(&self, stream: &Stream, key: &K, bound: &mut F) -> Result<Action, LaunchError>
+    where
+        F: FnMut(&Stream) -> Result<(), LaunchError>,
+    {
+        Ok(match self.entries.get(key) {
             None => Action::FirstRun,
             Some(Entry::EagerOnly) => Action::Eager,
             Some(Entry::Captured {
@@ -335,7 +389,7 @@ impl<K: Eq + Hash> GraphCache<K> {
                 after_mismatch,
             }) if !graph.is_stale() => {
                 let verdict = if self.validate && self.policy == MismatchPolicy::Recapture {
-                    graph.validate(stream, &mut bound)
+                    graph.validate(stream, &mut *bound)
                 } else {
                     Ok(())
                 };
@@ -360,9 +414,19 @@ impl<K: Eq + Hash> GraphCache<K> {
                 run: GraphRun::Captured,
                 after_mismatch: false,
             },
-        };
-        before_launch(context)?;
-        let mut bound = |s: &Stream| body(context, s);
+        })
+    }
+
+    fn perform<F>(
+        &mut self,
+        stream: &Stream,
+        key: K,
+        action: Action,
+        bound: &mut F,
+    ) -> Result<GraphRun, LaunchError>
+    where
+        F: FnMut(&Stream) -> Result<(), LaunchError>,
+    {
         match action {
             Action::FirstRun => {
                 bound(stream)?;
@@ -384,7 +448,7 @@ impl<K: Eq + Hash> GraphCache<K> {
                         *after_mismatch = false;
                         // The device runs the graph meanwhile.
                         Some(if validate_after {
-                            graph.validate(stream, &mut bound)
+                            graph.validate(stream, &mut *bound)
                         } else {
                             Ok(())
                         })
@@ -403,13 +467,13 @@ impl<K: Eq + Hash> GraphCache<K> {
                         self.entries.insert(key, Entry::EagerOnly);
                         Err(error)
                     }
-                    None => self.capture(stream, key, &mut bound, GraphRun::Recaptured, false),
+                    None => self.capture(stream, key, bound, GraphRun::Recaptured, false),
                 }
             }
             Action::Capture {
                 run,
                 after_mismatch,
-            } => self.capture(stream, key, &mut bound, run, after_mismatch),
+            } => self.capture(stream, key, bound, run, after_mismatch),
             Action::Mismatch { error, repeated } => {
                 self.mismatches += 1;
                 self.last_mismatch = Some(error);
@@ -418,9 +482,42 @@ impl<K: Eq + Hash> GraphCache<K> {
                     bound(stream)?;
                     Ok(GraphRun::Eager)
                 } else {
-                    self.capture(stream, key, &mut bound, GraphRun::Recaptured, true)
+                    self.capture(stream, key, bound, GraphRun::Recaptured, true)
                 }
             }
+        }
+    }
+
+    /// Records `body` as the graph of `key` without launching it: its pass
+    /// has already been enqueued. A body HIP cannot capture stays eager.
+    fn record<F>(
+        &mut self,
+        stream: &Stream,
+        key: K,
+        body: &mut F,
+        run: GraphRun,
+        after_mismatch: bool,
+    ) -> Result<GraphRun, LaunchError>
+    where
+        F: FnMut(&Stream) -> Result<(), LaunchError>,
+    {
+        self.entries.remove(&key);
+        match Graph::capture(stream, &mut *body) {
+            Ok(graph) => {
+                self.entries.insert(
+                    key,
+                    Entry::Captured {
+                        graph,
+                        after_mismatch,
+                    },
+                );
+                Ok(run)
+            }
+            Err(error) if capture_unsupported(&error) => {
+                self.entries.insert(key, Entry::EagerOnly);
+                Ok(GraphRun::Eager)
+            }
+            Err(error) => Err(error),
         }
     }
 

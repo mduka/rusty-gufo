@@ -898,9 +898,14 @@ impl Session {
     }
 
     /// Drops every token; the next forward starts at position 0. Borrowed
-    /// rows stay until that forward would overwrite them.
-    pub fn reset(&mut self, stream: &Stream) -> Result<(), HipError> {
-        self.trim_rollback(0);
+    /// rows stay until that forward would overwrite them. With `reuse_mtp`
+    /// an MTP session keeps its rollback rows: the next verification
+    /// overwrites them, and their stable addresses keep its graphs, which
+    /// would otherwise be allocated and recorded again (`Reset`).
+    pub fn reset(&mut self, stream: &Stream, reuse_mtp: bool) -> Result<(), HipError> {
+        if !reuse_mtp || !self.mtp_enabled {
+            self.trim_rollback(0);
+        }
         self.position = 0;
         self.spec_tokens = 0;
         self.ngram.reset();

@@ -1053,7 +1053,7 @@ impl Executor {
         result: Result<(), String>,
     ) -> Result<SnapshotInfo, String> {
         if let Err(e) = result {
-            let _ = session.reset(&self.stream);
+            let _ = session.reset(&self.stream, false);
             return Err(e);
         }
         session

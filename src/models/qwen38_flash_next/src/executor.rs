@@ -745,16 +745,30 @@ impl Executor {
         graph: bool,
         body: impl FnMut(&mut Core, &Stream, &mut Session) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        self.run_with(session, key, graph, body, |_, _| Ok(()))
+        self.run_graph(session, key, graph, false, body, |_, _| Ok(()))
     }
 
-    /// [`run`](Self::run) with `before_launch` ahead of the body's work
-    /// ([`gufo_hip::GraphCache::run_with`]).
+    /// [`run`](Self::run) of a forward's target pass, with `before_launch`
+    /// ahead of the body's work. A capture enqueues the pass first and
+    /// records its launches while the device executes it, as `Run` does for
+    /// a warmed target shape ([`gufo_hip::GraphCache::run_overlapped`]).
     pub(crate) fn run_with(
         &mut self,
         session: &mut Session,
         key: u64,
         graph: bool,
+        body: impl FnMut(&mut Core, &Stream, &mut Session) -> Result<(), Error>,
+        before_launch: impl FnOnce(&mut Core, &Stream) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.run_graph(session, key, graph, true, body, before_launch)
+    }
+
+    fn run_graph(
+        &mut self,
+        session: &mut Session,
+        key: u64,
+        graph: bool,
+        overlapped: bool,
         mut body: impl FnMut(&mut Core, &Stream, &mut Session) -> Result<(), Error>,
         before_launch: impl FnOnce(&mut Core, &Stream) -> Result<(), Error>,
     ) -> Result<(), Error> {
@@ -775,13 +789,29 @@ impl Executor {
         };
         let mut graphs = std::mem::take(&mut session.graphs);
         let stream = &self.stream;
-        let result = graphs.run_with(
-            stream,
-            key,
-            &mut (&mut self.core, &mut *session),
-            |(core, session), stream| body(core, stream, session).map_err(to_launch),
-            |(core, _)| before_launch(core, stream).map_err(to_launch),
-        );
+        let mut context = (&mut self.core, &mut *session);
+        let body = |(core, session): &mut (&mut Core, &mut Session), stream: &Stream| {
+            body(core, stream, session).map_err(to_launch)
+        };
+        let before_launch = |(core, _): &mut (&mut Core, &mut Session)| {
+            before_launch(core, stream).map_err(to_launch)
+        };
+        let result = if overlapped {
+            // The producer readiness and the alternating scratch the pass
+            // leaves are what the recorded launches start from (`Run`'s
+            // dispatch tuple).
+            graphs.run_overlapped(
+                stream,
+                key,
+                &mut context,
+                body,
+                before_launch,
+                |(core, _)| core.dispatch(),
+                |(core, _), dispatch| core.set_dispatch(dispatch),
+            )
+        } else {
+            graphs.run_with(stream, key, &mut context, body, before_launch)
+        };
         session.graphs = graphs;
         result.map(|_| ()).map_err(|e| match message.into_inner() {
             Some(text) => Error::Other(text),
@@ -895,7 +925,36 @@ impl Executor {
     }
 }
 
+/// The state a pass leaves for the next launches: producer readiness and
+/// which rows the staging buffers hold.
+#[derive(Clone, Copy)]
+pub(crate) struct Dispatch {
+    route: Route,
+    q8_slot: usize,
+    q8_src: [Option<(usize, u32, u32)>; 2],
+    q8t_src: Option<(usize, u32, usize)>,
+    half_src: Option<(usize, u32, usize, bool)>,
+}
+
 impl Core {
+    pub(crate) fn dispatch(&self) -> Dispatch {
+        Dispatch {
+            route: self.route,
+            q8_slot: self.stage.q8_slot,
+            q8_src: self.stage.q8_src,
+            q8t_src: self.stage.q8t_src,
+            half_src: self.stage.half_src,
+        }
+    }
+
+    pub(crate) fn set_dispatch(&mut self, dispatch: Dispatch) {
+        self.route = dispatch.route;
+        self.stage.q8_slot = dispatch.q8_slot;
+        self.stage.q8_src = dispatch.q8_src;
+        self.stage.q8t_src = dispatch.q8t_src;
+        self.stage.half_src = dispatch.half_src;
+    }
+
     /// Hashes the batch's n-gram rows and starts reading them from disk, so
     /// the read overlaps the layers before the PLE layer (`PleFetch`).
     fn ple_fetch(

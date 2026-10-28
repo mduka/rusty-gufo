@@ -123,7 +123,7 @@ pub(crate) struct Hints {
 
 /// State of the routes within one forward (the C++ executor's mutable
 /// members).
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct Route {
     /// Prompt arithmetic at every chunk width (`prefill_phase`).
     pub prefill: bool,
