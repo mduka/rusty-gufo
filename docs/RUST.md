@@ -52,10 +52,13 @@ speed, load time and memory are checked against it
 the same ROCm, every device function the Rust binary shares with upstream's
 C++ build has the same instructions and resources
 (`tools/bench/kernel-isa.py`; llama.cpp's abort stubs aside, which print
-their source path), except the three Flash-Next kernels that upstream's
-[#849](https://github.com/gufo-org/gufo/pull/849) bounds by their buffers
-(sparse-attention block selection and the draft-ID remap); for valid inputs
-they change no output. Otherwise the
+their source path), except the three Flash-Next kernels that the first
+commit of upstream's [#849](https://github.com/gufo-org/gufo/pull/849)
+bounds by their buffers (sparse-attention block selection and the draft-ID
+remap); for valid inputs they change no output. Upstream merged #849 after
+v0.26.0 with a second commit that also bounds the mask reads of selection
+compaction and attention by the mask row; the port takes the merged kernels
+at its next sync. Otherwise the
 HIP sources differ from upstream's only in host code: the C++ launchers
 that Rust replaces are gone, adapters give the launcher contract its flat
 signatures, and the two vendored quantized-GEMM tiers take the caller's
@@ -270,7 +273,7 @@ Against v0.23.0. Everything not listed behaves as upstream does.
 | Flash-Next n-gram rows across cache checkpoints | Read through the page cache; the prefetch across checkpoint boundaries is not ported. |
 | Image sessions and HIP graphs | Graph keys carry whether a session has an image RoPE table, so text graphs survive an image's arrival and image graphs are captured once per shape. |
 | JPEG decoding | `zune-jpeg` instead of libjpeg-turbo: pixels may differ by a few levels (another IDCT and upsampling), so outputs on JPEG images may differ. PNG and WebP decode as upstream's do. |
-| Flash-Next kernel bounds checks | The kernels of upstream's unmerged [#849](https://github.com/gufo-org/gufo/pull/849): sparse-attention scoring and marking stop at the `max_blocks` scores a row holds (a wide prefill sizes the rows by its host position), and the draft remap turns a row past its table into `u32::MAX`, as an empty slot is. The launcher contracts state these extents; upstream's v0.23.0 kernels index past their buffers when the device position and the host's row size disagree, or a row lies past the table, which today's callers and producers never give. Valid inputs give the same outputs. |
+| Flash-Next kernel bounds checks | The kernels of the first commit of [#849](https://github.com/gufo-org/gufo/pull/849), which upstream merged after v0.26.0: sparse-attention scoring and marking stop at the `max_blocks` scores a row holds (a wide prefill sizes the rows by its host position), and the draft remap turns a row past its table into `u32::MAX`, as an empty slot is. The launcher contracts state these extents; upstream's v0.23.0 kernels index past their buffers when the device position and the host's row size disagree, or a row lies past the table, which today's callers and producers never give. Valid inputs give the same outputs. The merged #849 also bounds the mask reads of `CompactSelectionKernel` and `AttentionKernel` by the mask row; the port takes them at its next sync. |
 | Flash-Next quantized-GEMM scratch | Each routed call of the vendored tier allocates from scratch the executor passes (`qfn_mmq_set_scratch`), so a captured graph keeps memory that cannot be freed under it; upstream's tier grows one arena per stream. |
 | DeepSeek V4 Flash quantized-GEMM scratch | The vendored tier reuses its persistent scratch on the engine's stream; upstream's C++ engine runs on the legacy stream, the only one where the tier reuses it. |
 | DFlash2 prompt features | The 27B target captures prompt features into one pinned buffer per model, which grows to the longest prompt and serves every session; upstream pins about 400 MiB of host memory per session at startup. |
@@ -318,6 +321,9 @@ Measured on 2026-10-27 and 28 on a Radeon 8060S (gfx1151) with 128 GiB and
 ROCm 10.1, 4 to 8 rounds per run. Each cell gives, per Rust run, the median
 ratio Rust/C++ as a change in percent (bold where that run fails the
 gate), and in brackets the highest upper bound of the runs' 95% intervals.
+The rows show the build measured then; the paragraphs after the table
+describe the changes since, which remove the MTP decoding gap of `fn-mtp`
+and `serve-fn-mtp`.
 
 | Workload | Request | Gated stages | Load | Memory | Device memory | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |

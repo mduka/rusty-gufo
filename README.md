@@ -8,10 +8,10 @@
 > **This fork ports Gufo's host code to Rust.** It is [Gufo](https://github.com/gufo-org/gufo)
 > release [v0.23.0](https://github.com/gufo-org/gufo/releases/tag/v0.23.0) with the C++
 > engines, server, CLI and HIP resource management rewritten in Rust. The GPU kernels are
-> upstream's HIP code, unchanged but for upstream's open bounds fix
-> [#849](https://github.com/gufo-org/gufo/pull/849). Outputs equal the C++ build's bit for bit
-> on its deterministic paths, and speed, load time and memory are measured against it on
-> ROCm 10.1 ([Gufo in Rust](docs/RUST.md)). The fork also adds
+> upstream's HIP code, unchanged but for the bounds fix of
+> [#849](https://github.com/gufo-org/gufo/pull/849), since merged upstream. Outputs equal the
+> C++ build's bit for bit on its deterministic paths, and speed, load time and memory are
+> measured against it on ROCm 10.1 ([Gufo in Rust](docs/RUST.md)). The fork also adds
 > [`gufo arbiter`](docs/ARBITER.md), with which servers share one GPU so that streamed speech
 > stays in real time while a language model generates. Not ported: MiniMax H3 and Windows.
 > The port is proposed to upstream; until then it follows upstream releases here.
