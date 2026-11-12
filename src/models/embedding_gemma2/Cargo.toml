@@ -1,0 +1,37 @@
+[package]
+name = "gufo-embedding-gemma2"
+version = "0.1.0"
+description = "EmbeddingGemma 2 text, image, video and audio embeddings on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The kernels crate shares the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/**/*.rs", "tests/fixtures/**"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-embedding-gemma2 --features gpu
+gpu = []
+# Tests that need the checkpoint (see tests/common): --features gpu,models
+models = []
+
+[dependencies]
+claxon.workspace = true
+gufo-core.workspace = true
+gufo-ffmpeg.workspace = true
+gufo-hip.workspace = true
+gufo-embedding-gemma2-kernels = { path = "kernels" }
+hound.workspace = true
+lewton.workspace = true
+nanomp3.workspace = true
+rubato.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+tempfile.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

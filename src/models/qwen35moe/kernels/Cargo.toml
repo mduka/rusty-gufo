@@ -1,0 +1,21 @@
+[package]
+name = "gufo-qwen35moe-kernels"
+version = "0.1.0"
+description = "Qwen3.6 35B-A3B (qwen35moe) HIP kernels behind generated, checked Rust launchers"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-qwen35moe-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

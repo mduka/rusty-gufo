@@ -1,0 +1,28 @@
+{
+ "source": "C++ reference: slimsami/strycast-qwen35moe-gufo-extension 4882b7a (Strycast 88ca363e) with the local probe tests/q35moe_probe.cpp, built into Gufo 0fb50ce4 (cmake preset gpu-test, ROCm 10.1) and run on ROCm 10.1's libraries (LD_LIBRARY_PATH=/opt/rocm/core-10.1/lib); see README.md",
+ "probe_sha256_16": "399bd42e09d0edc0",
+ "model": "Qwen3.6-35B-A3B-Q8_0.gguf",
+ "max_context": 6144,
+ "kv_cache": "f16",
+ "mode": "session",
+ "rocm_libraries": "/opt/rocm/core-10.1/lib",
+ "repeat_runs": 2,
+ "repeat_identical": true,
+ "suffix": [248046, 198, 248045, 846, 198, 6820, 799, 883, 22767, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+ "cases": [
+  {
+   "prompt": "synthetic body",
+   "body": 7,
+   "max_new_tokens": 24,
+   "first": [2064, 4816, 1040, 678, 1876, 2493, 381, 31084, 466, 23644, 13, 16018, 488, 4338, 35932, 1092, 488, 2224, 9859, 883, 30, 1690, 3010, 25],
+   "second": [38493, 0, 5514, 579, 264, 2716, 31708, 883, 22767, 25, 271, 332, 1, 1582, 66506, 314, 279, 85229, 175267, 271, 11635, 3294, 279, 28552]
+  },
+  {
+   "prompt": "haiku",
+   "body": null,
+   "max_new_tokens": 64,
+   "first": [54, 4541, 9626, 383, 279, 29199, 11, 198, 45742, 22186, 70235, 303, 279, 9662, 11, 198, 3601, 1657, 6105, 32946, 13],
+   "second": [9894, 9518, 5615, 279, 17024, 12515, 11, 198, 60187, 18009, 28056, 308, 303, 6353, 3000, 11, 198, 26677, 738, 9687, 279, 9114, 13]
+  }
+ ]
+}

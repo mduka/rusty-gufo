@@ -1,0 +1,17 @@
+<|im_start|>system
+You are a careful programming assistant. Answer concisely.<|im_end|>
+<|im_start|>user
+Write a Python function that returns the n-th Fibonacci number iteratively.<|im_end|>
+<|im_start|>assistant
+<think></think>```python
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+```
+It runs in O(n) time and O(1) space; fib(90) = 2880067194370816120.<|im_end|>
+<|im_start|>user
+And recursively?<|im_end|>
+<|im_start|>assistant
+<think>

@@ -1,0 +1,8 @@
+# The functional client alone; tools/requirements.txt includes it.
+# Covers every third-party import in tests/functional.
+openai==2.41.1
+httpx==0.28.1
+pydantic==2.13.4
+jsonschema==4.26.0
+pillow==12.3.0
+numpy==2.5.1

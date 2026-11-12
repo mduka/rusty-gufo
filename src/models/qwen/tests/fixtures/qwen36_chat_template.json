@@ -1,0 +1,490 @@
+{
+ "template_sha256": "55d4931433fe502b794226ee7f4d206a6bdd436ac9f80eb7d8ebb4c639f9ea0c",
+ "source": "tokenizer.chat_template of unsloth Qwen3.6-35B-A3B GGUFs",
+ "cases": [
+  {
+   "name": "plain_off",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Write a haiku about the sea.",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": false
+   },
+   "text": "<|im_start|>user\nWrite a haiku about the sea.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "name": "plain_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Write a haiku about the sea.",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>user\nWrite a haiku about the sea.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "plain_default",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Write a haiku about the sea.",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {},
+   "text": "<|im_start|>user\nWrite a haiku about the sea.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "effort_low_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Write a haiku about the sea.",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true,
+    "reasoning_effort": "low"
+   },
+   "text": "<|im_start|>user\nWrite a haiku about the sea.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "effort_xhigh_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Write a haiku about the sea.",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true,
+    "reasoning_effort": "xhigh"
+   },
+   "text": "<|im_start|>user\nWrite a haiku about the sea.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "system_tools_off",
+   "chat": [
+    {
+     "role": "system",
+     "content": "You are a helpful assistant.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "What is the weather in Paris right now?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [
+    "{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"City name\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"city\"]}}}"
+   ],
+   "kwargs": {
+    "enable_thinking": false
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>\n\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat is the weather in Paris right now?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "name": "system_tools_on",
+   "chat": [
+    {
+     "role": "system",
+     "content": "You are a helpful assistant.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "What is the weather in Paris right now?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [
+    "{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"City name\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"city\"]}}}"
+   ],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>\n\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat is the weather in Paris right now?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "tool_history_off",
+   "chat": [
+    {
+     "role": "system",
+     "content": "You are a helpful assistant.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "What is the weather in Paris right now?",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "thought": "The user asks for weather.",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "name": "get_weather",
+       "arguments": [
+        [
+         "city",
+         "Paris",
+         true
+        ],
+        [
+         "unit",
+         "celsius",
+         true
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "content": "{\"temp_c\": 18, \"sky\": \"cloudy\"}",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [
+    "{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"City name\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"city\"]}}}"
+   ],
+   "kwargs": {
+    "enable_thinking": false
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>\n\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhat is the weather in Paris right now?<|im_end|>\n<|im_start|>assistant\n<think>\nThe user asks for weather.\n</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n<parameter=unit>\ncelsius\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\n{\"temp_c\": 18, \"sky\": \"cloudy\"}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "name": "tool_loop_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris?",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "thought": "Call the tool.",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "name": "get_weather",
+       "arguments": [
+        [
+         "city",
+         "Paris",
+         true
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "content": "sunny",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [
+    "{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\",\"description\":\"City name\"},\"unit\":{\"type\":\"string\",\"enum\":[\"celsius\",\"fahrenheit\"]}},\"required\":[\"city\"]}}}"
+   ],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"City name\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}}, \"required\": [\"city\"]}}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\nWhat is the weather in Paris?<|im_end|>\n<|im_start|>assistant\n<think>\nCall the tool.\n</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nsunny\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "typed_arguments_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Record the values.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "Recording now.",
+     "thought": "",
+     "tool_calls": [
+      {
+       "id": "call_1",
+       "name": "record",
+       "arguments": [
+        [
+         "flag",
+         "true",
+         false
+        ],
+        [
+         "count",
+         "3",
+         false
+        ],
+        [
+         "note",
+         "null",
+         false
+        ],
+        [
+         "tags",
+         "[\"a\", \"b\"]",
+         false
+        ],
+        [
+         "meta",
+         "{\"k\": 1, \"nested\": [false, null]}",
+         false
+        ]
+       ]
+      },
+      {
+       "id": "call_2",
+       "name": "record",
+       "arguments": [
+        [
+         "flag",
+         "false",
+         false
+        ],
+        [
+         "note",
+         "plain text",
+         true
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "content": "ok",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "tool",
+     "content": "ok again",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Thanks. Anything else?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [
+    "{\"type\":\"function\",\"function\":{\"name\":\"record\",\"description\":\"Store typed values.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"flag\":{\"type\":\"boolean\"},\"count\":{\"type\":\"integer\"},\"note\":{\"type\":[\"string\",\"null\"]},\"tags\":{\"type\":\"array\"},\"meta\":{\"type\":\"object\"}}}}}"
+   ],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"record\", \"description\": \"Store typed values.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"flag\": {\"type\": \"boolean\"}, \"count\": {\"type\": \"integer\"}, \"note\": {\"type\": [\"string\", \"null\"]}, \"tags\": {\"type\": \"array\"}, \"meta\": {\"type\": \"object\"}}}}}\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT><|im_end|>\n<|im_start|>user\nRecord the values.<|im_end|>\n<|im_start|>assistant\nRecording now.\n\n<tool_call>\n<function=record>\n<parameter=flag>\nTrue\n</parameter>\n<parameter=count>\n3\n</parameter>\n<parameter=note>\nNone\n</parameter>\n<parameter=tags>\n[\"a\", \"b\"]\n</parameter>\n<parameter=meta>\n{\"k\": 1, \"nested\": [false, null]}\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=record>\n<parameter=flag>\nFalse\n</parameter>\n<parameter=note>\nplain text\n</parameter>\n</function>\n</tool_call><|im_end|>\n<|im_start|>user\n<tool_response>\nok\n</tool_response>\n<tool_response>\nok again\n</tool_response><|im_end|>\n<|im_start|>user\nThanks. Anything else?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "multi_turn_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Pick a number.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "Seven.",
+     "thought": "The user wants any number.",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Why that one?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>user\nPick a number.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nWhy that one?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "multi_turn_preserve",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Pick a number.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "Seven.",
+     "thought": "The user wants any number.",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Why that one?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true,
+    "preserve_thinking": true
+   },
+   "text": "<|im_start|>user\nPick a number.<|im_end|>\n<|im_start|>assistant\n<think>\nThe user wants any number.\n</think>\n\nSeven.<|im_end|>\n<|im_start|>user\nWhy that one?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "multi_turn_no_preserve",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Pick a number.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "Seven.",
+     "thought": "The user wants any number.",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Why that one?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true,
+    "preserve_thinking": false
+   },
+   "text": "<|im_start|>user\nPick a number.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nWhy that one?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "inline_reasoning_on",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Pick a number.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "<think>\nAny number works.\n</think>\n\nSeven.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Why that one?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true
+   },
+   "text": "<|im_start|>user\nPick a number.<|im_end|>\n<|im_start|>assistant\nSeven.<|im_end|>\n<|im_start|>user\nWhy that one?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "inline_reasoning_preserve",
+   "chat": [
+    {
+     "role": "user",
+     "content": "Pick a number.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "assistant",
+     "content": "<think>\nAny number works.\n</think>\n\nSeven.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Why that one?",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": true,
+    "preserve_thinking": true
+   },
+   "text": "<|im_start|>user\nPick a number.<|im_end|>\n<|im_start|>assistant\n<think>\nAny number works.\n</think>\n\nSeven.<|im_end|>\n<|im_start|>user\nWhy that one?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "name": "system_developer_off",
+   "chat": [
+    {
+     "role": "system",
+     "content": "Be brief.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "developer",
+     "content": "Answer in English.",
+     "thought": "",
+     "tool_calls": []
+    },
+    {
+     "role": "user",
+     "content": "Hi",
+     "thought": "",
+     "tool_calls": []
+    }
+   ],
+   "tools": [],
+   "kwargs": {
+    "enable_thinking": false
+   },
+   "text": "<|im_start|>system\nBe brief.\nAnswer in English.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  }
+ ]
+}

@@ -1,0 +1,510 @@
+# Kernel contract for the OmniVoice kernels (docs/development/DESIGN.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes
+# (tests/extents.rs).
+
+[library]
+name = "omnivoice"
+root = "../../../.."
+namespace = "gufo::models::omnivoice::kernels"
+f16_type = "__half"
+headers = [
+  "src/models/omnivoice/hip/generator_kernels.hpp",
+  "src/models/omnivoice/hip/codec_kernels.hpp",
+  "src/models/omnivoice/hip/encoder_kernels.hpp",
+]
+
+[[source]]
+path = "src/models/omnivoice/hip/generator_kernels.hip"
+# The extension's CMake target: -O2, then -O3 from its own flags.
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/omnivoice/hip/codec_kernels.hip"
+# The extension's CMake target: -O2, then -O3 from its own flags.
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/omnivoice/hip/encoder_kernels.hip"
+# The extension's CMake target: -O2, then -O3 from its own flags.
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+# --- Generator ---------------------------------------------------------------
+
+[[launcher]]
+name = "embed"
+cpp = "Embed"
+returns = "void"
+doc = "Rows below `text_rows` copy `text`; the others sum the audio embeddings of their codes (`ids` is `[codebook][row]`; text rows' IDs are not read)."
+params = [
+  { name = "text", kind = "in", elem = "f32", len = "text_rows * width" },
+  { name = "text_rows", kind = "scalar", type = "usize" },
+  { name = "table", kind = "in", elem = "f32", len = "codebooks * vocab * width" },
+  { name = "ids", kind = "indices", signed = true, len = "codebooks * rows", below = "vocab" },
+  { name = "hidden", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "codebooks", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize" },
+]
+requires = ["text_rows <= rows"]
+probes = [
+  { text_rows = 3, rows = 7, width = 300, codebooks = 8, vocab = 5 },
+  { text_rows = 0, rows = 1, width = 1, codebooks = 1, vocab = 1 },
+]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "RmsNorm"
+returns = "void"
+doc = "`output = half(weight * x * rsqrt(mean(x^2) + epsilon))` per row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width" },
+  { name = "output", kind = "out", elem = "f16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 1024, epsilon = 1e-6 },
+  { rows = 1, width = 7, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "qk_norm_rope"
+cpp = "QkNormRope"
+returns = "void"
+doc = "Splits the fused projection `[q heads | k heads | v heads]` per row, normalizes and rotates q and k, and writes head-major half `[heads][rows][head_dim]` q, k and v (k and v repeated per query head of their group)."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "rows * (heads + 2 * kv_heads) * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "positions", kind = "in", elem = "i32", len = "rows" },
+  { name = "q", kind = "out", elem = "f16", len = "heads * rows * head_dim" },
+  { name = "k", kind = "out", elem = "f16", len = "heads * rows * head_dim" },
+  { name = "v", kind = "out", elem = "f16", len = "heads * rows * head_dim" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+  { name = "rope_theta", kind = "scalar", type = "f32" },
+]
+requires = ["kv_heads >= 1", "kv_heads <= heads", "head_dim <= 2048"]
+probes = [
+  { rows = 5, heads = 16, kv_heads = 8, head_dim = 128, epsilon = 1e-6, rope_theta = 1000000.0 },
+  { rows = 1, heads = 3, kv_heads = 2, head_dim = 6, epsilon = 1e-6, rope_theta = 10000.0 },
+]
+
+[[launcher]]
+name = "softmax"
+cpp = "Softmax"
+returns = "void"
+doc = "`output[row] = half(softmax(scores[row] * scale))` for rows of `columns`."
+params = [
+  { name = "scores", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "output", kind = "out", elem = "f16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 4, columns = 300, scale = 0.125 },
+  { rows = 1, columns = 1, scale = 1.0 },
+]
+
+[[launcher]]
+name = "merge_heads"
+cpp = "MergeHeads"
+returns = "void"
+doc = "Head-major float `[heads][rows][head_dim]` to row-major half `[rows][heads * head_dim]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "heads * rows * head_dim" },
+  { name = "output", kind = "out", elem = "f16", len = "rows * heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, heads = 16, head_dim = 128 },
+  { rows = 1, heads = 1, head_dim = 3 },
+]
+
+[[launcher]]
+name = "swiglu"
+cpp = "SwiGlu"
+returns = "void"
+doc = "`output[row][i] = half(silu(gate_up[row][i]) * gate_up[row][width + i])`."
+params = [
+  { name = "gate_up", kind = "in", elem = "f32", len = "rows * 2 * width" },
+  { name = "output", kind = "out", elem = "f16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, width = 3072 },
+  { rows = 1, width = 1 },
+]
+
+[[launcher]]
+name = "gather_rows"
+cpp = "GatherRows"
+returns = "void"
+doc = "`output[i] = input[indices[i]]` for rows of `width` floats."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "input_rows * width" },
+  { name = "indices", kind = "indices", signed = true, len = "rows", below = "input_rows" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "input_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { rows = 4, width = 1024, input_rows = 9 },
+  { rows = 1, width = 1, input_rows = 1 },
+]
+
+[[launcher]]
+name = "score"
+cpp = "Score"
+returns = "void"
+doc = "The unmasking step's scoring: guided log-softmax of the conditional rows `[0, frames)` against the unconditional rows `[frames, 2 * frames)`, without the mask entry; argmax and its log-probability to `prediction` / `confidence` `[codebook][frame]`."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "2 * frames * codebooks * vocab" },
+  { name = "prediction", kind = "out", elem = "i32", len = "codebooks * frames" },
+  { name = "confidence", kind = "out", elem = "f32", len = "codebooks * frames" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "codebooks", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize" },
+  { name = "mask_id", kind = "scalar", type = "u32" },
+  { name = "guidance", kind = "scalar", type = "f32" },
+]
+probes = [
+  { frames = 5, codebooks = 8, vocab = 1025, mask_id = 1024, guidance = 2.0 },
+  { frames = 1, codebooks = 1, vocab = 2, mask_id = 1, guidance = 0.0 },
+]
+
+# --- Audio tokenizer decoder -------------------------------------------------
+
+[[launcher]]
+name = "snake"
+cpp = "Snake"
+returns = "void"
+doc = "`output[c][pad + t] = x + sin(alpha[c] * x)^2 / (alpha[c] + 1e-9)` with `pad` zeros on both sides of each output row (row stride `length + 2 * pad`)."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "channels * input_stride" },
+  { name = "input_stride", kind = "scalar", type = "usize" },
+  { name = "alpha", kind = "in", elem = "f32", len = "channels" },
+  { name = "output", kind = "out", elem = "f32", len = "channels * (length + 2 * pad)" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "length", kind = "scalar", type = "usize" },
+  { name = "pad", kind = "scalar", type = "usize" },
+]
+requires = ["input_stride >= length"]
+probes = [
+  { input_stride = 300, channels = 4, length = 300, pad = 27 },
+  { input_stride = 1, channels = 1, length = 1, pad = 0 },
+]
+
+[[launcher]]
+name = "add_channel_bias"
+cpp = "AddChannelBias"
+returns = "void"
+doc = "`data[c][t] += bias[c]` for `t < length`, rows `stride` apart."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "(channels - 1) * stride + length" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "length", kind = "scalar", type = "usize" },
+]
+requires = ["channels >= 1", "stride >= length"]
+probes = [
+  { stride = 306, channels = 5, length = 300 },
+  { stride = 1, channels = 1, length = 1 },
+]
+
+[[launcher]]
+name = "add_column_bias"
+cpp = "AddColumnBias"
+returns = "void"
+doc = "`data[r][j] += bias[j]` for rows of `columns`."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "f32", len = "columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, columns = 1024 },
+  { rows = 1, columns = 1 },
+]
+
+[[launcher]]
+name = "col2im"
+cpp = "Col2Im"
+returns = "void"
+doc = "ConvTranspose1d's overlap-add of `columns` `[kernel][channels][input_length]` into `output[c][t] = bias[c] + ...` for `t < input_length * stride`."
+params = [
+  { name = "columns", kind = "in", elem = "f32", len = "kernel * channels * input_length" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "output", kind = "out", elem = "f32", len = "channels * input_length * stride" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "input_length", kind = "scalar", type = "usize" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "pad", kind = "scalar", type = "usize" },
+]
+requires = ["stride >= 1"]
+probes = [
+  { channels = 4, input_length = 7, stride = 8, kernel = 16, pad = 4 },
+  { channels = 1, input_length = 1, stride = 1, kernel = 2, pad = 1 },
+]
+
+[[launcher]]
+name = "codebook_sum"
+cpp = "CodebookSum"
+returns = "void"
+doc = "RVQ decode: `output[t][h] = sum_c table[c][codes[c][t]][h]`."
+params = [
+  { name = "table", kind = "in", elem = "f32", len = "codebooks * entries * width" },
+  { name = "codes", kind = "indices", signed = true, len = "codebooks * frames", below = "entries" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * width" },
+  { name = "codebooks", kind = "scalar", type = "usize" },
+  { name = "entries", kind = "scalar", type = "usize" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [
+  { codebooks = 8, entries = 4, frames = 3, width = 300 },
+  { codebooks = 1, entries = 1, frames = 1, width = 1 },
+]
+
+# --- Audio tokenizer encoder -------------------------------------------------
+
+[[launcher]]
+name = "im2col"
+cpp = "Im2Col"
+returns = "void"
+doc = "`columns[c * kernel + k][t] = input[c][t * stride + k * dilation - pad]` (zero outside the input) for `t < output_length`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "channels * length" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "length", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "dilation", kind = "scalar", type = "usize" },
+  { name = "pad", kind = "scalar", type = "usize" },
+  { name = "output_length", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "out", elem = "f32", len = "channels * kernel * output_length" },
+]
+requires = ["kernel >= 1"]
+probes = [
+  { channels = 3, length = 50, kernel = 10, stride = 5, dilation = 1, pad = 2, output_length = 9 },
+  { channels = 1, length = 1, kernel = 3, stride = 1, dilation = 2, pad = 9, output_length = 4 },
+]
+
+[[launcher]]
+name = "group_norm_gelu"
+cpp = "GroupNormGelu"
+returns = "void"
+doc = "Per channel of `[channels][length]`: normalize over time, scale, shift and apply the exact GELU, in place."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "channels * length" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "length", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { channels = 4, length = 700, epsilon = 1e-5 },
+  { channels = 1, length = 1, epsilon = 1e-5 },
+]
+
+[[launcher]]
+name = "gelu"
+cpp = "Gelu"
+returns = "void"
+doc = "Exact (erf) GELU in place."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }]
+
+[[launcher]]
+name = "elu"
+cpp = "Elu"
+returns = "void"
+doc = "ELU (alpha 1) from `input` to `output`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }]
+
+[[launcher]]
+name = "elu_in_place"
+cpp = "Elu"
+returns = "void"
+doc = "`elu` with `values` as input and output."
+params = [
+  { name = "input", kind = "alias", of = "values", elem = "f32", read_only = true },
+  { name = "values", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }]
+
+[[launcher]]
+name = "transpose"
+cpp = "Transpose"
+returns = "void"
+doc = "`output[c][r] = input[r][c]` for a `[rows][columns]` input; output rows are `output_stride` apart."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "output", kind = "out", elem = "f32", len = "(columns - 1) * output_stride + rows" },
+  { name = "output_stride", kind = "scalar", type = "usize" },
+]
+requires = ["columns >= 1", "output_stride >= rows"]
+probes = [
+  { rows = 70, columns = 33, output_stride = 80 },
+  { rows = 1, columns = 1, output_stride = 1 },
+]
+
+[[launcher]]
+name = "layer_norm"
+cpp = "LayerNorm"
+returns = "void"
+doc = "LayerNorm over rows of `width`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 768, epsilon = 1e-5 },
+  { rows = 1, width = 1, epsilon = 1e-5 },
+]
+
+[[launcher]]
+name = "layer_norm_in_place"
+cpp = "LayerNorm"
+returns = "void"
+doc = "`layer_norm` with `values` as input and output."
+params = [
+  { name = "input", kind = "alias", of = "values", elem = "f32", read_only = true },
+  { name = "weight", kind = "in", elem = "f32", len = "width" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "values", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 768, epsilon = 1e-5 },
+  { rows = 1, width = 1, epsilon = 1e-5 },
+]
+
+[[launcher]]
+name = "softmax_in_place"
+cpp = "SoftmaxInPlace"
+returns = "void"
+doc = "Row-wise softmax of `scores * scale` in place."
+params = [
+  { name = "scores", kind = "inout", elem = "f32", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 4, columns = 300, scale = 0.125 },
+  { rows = 1, columns = 1, scale = 1.0 },
+]
+
+[[launcher]]
+name = "accumulate"
+cpp = "Accumulate"
+returns = "void"
+doc = "`target[i] += source[i]`."
+params = [
+  { name = "source", kind = "in", elem = "f32", len = "count" },
+  { name = "target", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }]
+
+[[launcher]]
+name = "scale"
+cpp = "Scale"
+returns = "void"
+doc = "`data[i] *= scale`."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+probes = [{ count = 1000, scale = 0.5 }, { count = 1, scale = 2.0 }]
+
+[[launcher]]
+name = "nearest_entry"
+cpp = "NearestEntry"
+returns = "void"
+doc = "Nearest codebook entry per row by the reference's distance `-((|h|^2 - 2 h.e) + |e|^2)`."
+params = [
+  { name = "dots", kind = "in", elem = "f32", len = "rows * entries" },
+  { name = "projected", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "norms", kind = "in", elem = "f32", len = "entries" },
+  { name = "indices", kind = "indices_out", signed = true, len = "rows", below = "entries" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "entries", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+]
+requires = ["entries >= 1"]
+probes = [
+  { rows = 3, entries = 1024, dim = 64 },
+  { rows = 1, entries = 1, dim = 1 },
+]
+
+[[launcher]]
+name = "subtract_entries"
+cpp = "SubtractEntries"
+returns = "void"
+doc = "`residual[r] -= table[indices[r]]` for rows of `width`."
+params = [
+  { name = "residual", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "table", kind = "in", elem = "f32", len = "table_rows * width" },
+  { name = "indices", kind = "indices", signed = true, len = "rows", below = "table_rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "table_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { rows = 3, width = 1024, table_rows = 5 },
+  { rows = 1, width = 1, table_rows = 1 },
+]
+
+[[launcher]]
+name = "squared_norms"
+cpp = "SquaredNorms"
+returns = "void"
+doc = "`norms[e] = sum of entries[e]^2` over `dim`."
+params = [
+  { name = "entries", kind = "in", elem = "f32", len = "count * dim" },
+  { name = "norms", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "dim", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 5, dim = 64 },
+  { count = 1, dim = 1 },
+]

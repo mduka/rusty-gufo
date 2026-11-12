@@ -1,0 +1,6 @@
+<|im_start|>system
+<|im_end|>
+<|im_start|>user
+Write a Python function that returns the n-th Fibonacci number iteratively, with a docstring and two doctests.<|im_end|>
+<|im_start|>assistant
+<think>

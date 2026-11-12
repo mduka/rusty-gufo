@@ -1,0 +1,8 @@
+# The image builds from the tracked sources; nothing local goes in.
+.git
+.jj
+.venv
+target
+artifacts
+models
+**/__pycache__

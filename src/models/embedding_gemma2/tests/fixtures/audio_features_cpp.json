@@ -1,0 +1,17 @@
+{"cases":[
+{"name":"silence_1_pad0","samples":1,"kind":"silence","padding_samples":0,"frames":0,"soft_tokens":0,"mask":[],"features_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+{"name":"triangle_160_pad0","samples":160,"kind":"triangle","padding_samples":0,"frames":1,"soft_tokens":0,"mask":[0],"features_sha256":"076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560"},
+{"name":"triangle_161_pad0","samples":161,"kind":"triangle","padding_samples":0,"frames":1,"soft_tokens":1,"mask":[1],"features_sha256":"de8cfd73896f3d9b3bee79397a9b2c0b8793082d4a04b0d123541af01554ee5f"},
+{"name":"noise_255_pad0","samples":255,"kind":"noise","padding_samples":0,"frames":1,"soft_tokens":1,"mask":[1],"features_sha256":"16cfa70430c502b567aab92799ad4da3be4d96802087d4f6a4c2659519eb1dcc"},
+{"name":"noise_256_pad0","samples":256,"kind":"noise","padding_samples":0,"frames":1,"soft_tokens":1,"mask":[1],"features_sha256":"16cfa70430c502b567aab92799ad4da3be4d96802087d4f6a4c2659519eb1dcc"},
+{"name":"triangle_321_pad0","samples":321,"kind":"triangle","padding_samples":0,"frames":2,"soft_tokens":1,"mask":[1,1],"features_sha256":"354b19307d1e2fd599db2e7a0be4dbeb24be62f1b50317a00115826558a1ac7f"},
+{"name":"noise_640_pad0","samples":640,"kind":"noise","padding_samples":0,"frames":3,"soft_tokens":1,"mask":[1,1,1],"features_sha256":"74e48badedd426a369e8bfbf74a0d66a80bcd1fa5f42c9c55123272ba0fbcf4b"},
+{"name":"noise_641_pad0","samples":641,"kind":"noise","padding_samples":0,"frames":4,"soft_tokens":1,"mask":[1,1,1,1],"features_sha256":"0ba641703566246c19145d6d9194189c098e8e268a293df5cb1d7165adfa4e83"},
+{"name":"triangle_800_pad0","samples":800,"kind":"triangle","padding_samples":0,"frames":5,"soft_tokens":1,"mask":[1,1,1,1,0],"features_sha256":"ac9c9365655343a3672e5de4cecd8d77b5af2ecb0aa47f0192538e5f1474929a"},
+{"name":"triangle_801_pad0","samples":801,"kind":"triangle","padding_samples":0,"frames":5,"soft_tokens":2,"mask":[1,1,1,1,1],"features_sha256":"e55e15c7a4425766dfa87d81ea02909ac6d3abfce09949a1a3d29dbea129648d"},
+{"name":"noise_1023_pad0","samples":1023,"kind":"noise","padding_samples":0,"frames":6,"soft_tokens":2,"mask":[1,1,1,1,1,1],"features_sha256":"c729d22295c138868142665215dfef5dc2b3b623b3ef5afe736a3826248537ec"},
+{"name":"silence_1024_pad0","samples":1024,"kind":"silence","padding_samples":0,"frames":6,"soft_tokens":2,"mask":[1,1,1,1,1,1],"features_sha256":"c243e8c9b3060ac26b051ffe6dd2850c8e19fa97555432d450bcd11603884d44"},
+{"name":"triangle_1601_pad0","samples":1601,"kind":"triangle","padding_samples":0,"frames":10,"soft_tokens":3,"mask":[1,1,1,1,1,1,1,1,1,1],"features_sha256":"888d805574ddcfad61fed2f43575709e2e297fcc47447a01ece7488621a61e31"},
+{"name":"noise_321_pad16000","samples":321,"kind":"noise","padding_samples":16000,"frames":99,"soft_tokens":1,"mask":[1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"features_sha256":"25782f3abd8656180ac14066eef618ef6a2571d2f1e105dfe5d19947aeb0b00d"},
+{"name":"triangle_16000_pad0","samples":16000,"kind":"triangle","padding_samples":0,"frames":99,"soft_tokens":25,"mask":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"features_sha256":"8f5b050c7eca92c43d59e2be9ebd9abc17fc213300a45d0833ba12caf88e8332"}
+]}

@@ -1,0 +1,24 @@
+[package]
+name = "gufo-gemma4-kernels"
+version = "0.1.0"
+description = "Gemma 4 HIP kernels behind generated, checked Rust launchers"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-gemma4-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[dev-dependencies]
+gufo-formats.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

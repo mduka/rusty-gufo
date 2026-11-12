@@ -1,0 +1,526 @@
+# Kernel contract for the EmbeddingGemma 2 kernels (docs/development/DESIGN.md).
+# Extents are element counts; every C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes
+# (tests/extents.rs). Activations are f32 between operations; GEMM inputs and
+# the checkpoint's weights are BF16.
+
+[library]
+name = "embedding_gemma2"
+root = "../../../.."
+namespace = "gufo::models::embedding_gemma2::hip"
+headers = [
+  "src/models/embedding_gemma2/kernels/hip/ops.hpp",
+  "src/models/embedding_gemma2/kernels/hip/vision_ops.hpp",
+  "src/models/embedding_gemma2/kernels/hip/audio_runtime.hpp",
+  "src/models/embedding_gemma2/kernels/adapters.hpp",
+]
+
+# The C++ build compiles these with its RelWithDebInfo flags, which are the
+# kernel build's defaults.
+[[source]]
+path = "src/models/embedding_gemma2/kernels/hip/ops.hip"
+
+[[source]]
+path = "src/models/embedding_gemma2/kernels/hip/vision_ops.hip"
+
+[[source]]
+path = "src/models/embedding_gemma2/kernels/hip/audio_runtime.hip"
+
+[[source]]
+path = "src/models/embedding_gemma2/kernels/adapters.hip"
+
+# --- Text backbone -----------------------------------------------------------
+
+[[launcher]]
+name = "embedding_lookup"
+cpp = "LaunchEmbeddingLookup"
+returns = "void"
+doc = "Gathers `table[token_ids[t]]`, scales it and rounds to BF16; writes the f32 residual stream and the BF16 copy that feeds the per-layer projection."
+params = [
+  { name = "table", kind = "in", elem = "bf16", len = "rows * hidden" },
+  { name = "token_ids", kind = "indices", len = "tokens", below = "rows" },
+  { name = "state", kind = "out", elem = "f32", len = "tokens * hidden" },
+  { name = "embeddings", kind = "out", elem = "bf16", len = "tokens * hidden" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "hidden", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  # Rows of `table`; the kernel trusts the token IDs to stay below it.
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { tokens = 5, hidden = 512, scale = 22.625, rows = 3 },
+  { tokens = 1, hidden = 300, scale = 1.0, rows = 1 },
+]
+
+[[launcher]]
+name = "rms_norm_to_bf16"
+cpp = "LaunchRmsNormToBf16"
+returns = "void"
+doc = "`output = bf16(rmsnorm(input) * weight)` over each row."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "width" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 512, epsilon = 1e-6 },
+  { rows = 2, width = 300, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "rms_norm_residual"
+cpp = "LaunchRmsNormResidual"
+returns = "void"
+doc = "`state += rmsnorm(update) * weight` over each row."
+params = [
+  { name = "update", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "width" },
+  { name = "state", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 512, epsilon = 1e-6 },
+  { rows = 2, width = 768, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "scaled_rms_norm"
+cpp = "LaunchScaledRmsNorm"
+returns = "void"
+doc = "In place: `values = rmsnorm(values * scale) * weight` over each row."
+params = [
+  { name = "values", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 512, scale = 0.044, epsilon = 1e-6 },
+  { rows = 1, width = 100, scale = 1.0, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "float_to_bf16"
+cpp = "LaunchFloatToBf16"
+returns = "void"
+doc = "f32 to BF16, round to nearest even."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 1536 },
+  { count = 257 },
+]
+
+[[launcher]]
+name = "qkv_norm_rope"
+cpp = "LaunchQkvNormRopeFlat"
+returns = "void"
+doc = "Head RMS normalisation of the fused projection rows `[token][query heads | key heads | value heads][head_dim]` (weighted for query and key), rotary embedding of query and key from the `[position][head_dim / 2]` tables, and BF16 rounding of all three."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "tokens * (num_heads + 2 * num_key_value_heads) * head_dim" },
+  { name = "query_norm", kind = "in", elem = "bf16", len = "head_dim" },
+  { name = "key_norm", kind = "in", elem = "bf16", len = "head_dim" },
+  { name = "query", kind = "out", elem = "bf16", len = "tokens * num_heads * head_dim" },
+  { name = "key", kind = "out", elem = "bf16", len = "tokens * num_key_value_heads * head_dim" },
+  { name = "value", kind = "out", elem = "bf16", len = "tokens * num_key_value_heads * head_dim" },
+  { name = "positions", kind = "indices", len = "tokens", below = "rope_positions" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "rope_cos", kind = "in", elem = "f32", len = "rope_positions * (head_dim / 2)" },
+  { name = "rope_sin", kind = "in", elem = "f32", len = "rope_positions * (head_dim / 2)" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+  # Positions of the rotary tables; the kernel trusts `positions` below it.
+  { name = "rope_positions", kind = "scalar", type = "usize", contract_only = true },
+]
+# One thread per pair of a head's halves, in whole waves of a block of at
+# most 256 threads (the block reduction's eight slots).
+requires = ["head_dim % 64 == 0", "head_dim >= 64", "head_dim <= 512"]
+probes = [
+  { tokens = 3, num_heads = 4, num_key_value_heads = 2, head_dim = 256, epsilon = 1e-6, rope_positions = 5 },
+  { tokens = 2, num_heads = 4, num_key_value_heads = 1, head_dim = 512, epsilon = 1e-6, rope_positions = 2 },
+]
+
+[[launcher]]
+name = "transpose_values"
+cpp = "LaunchTransposeValues"
+returns = "void"
+doc = "Transposes BF16 values from `[token][column]` to `[column][token]` with `(tokens + 31) / 32 * 32` tokens per column (`ValueStride`), zero-filling the tokens past `tokens`: the layout `attention` reads."
+params = [
+  { name = "value", kind = "in", elem = "bf16", len = "tokens * columns" },
+  { name = "value_t", kind = "out", elem = "bf16", len = "(tokens + 31) / 32 * 32 * columns" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+# One block per 32 tokens and 32 columns.
+requires = ["columns % 32 == 0"]
+probes = [
+  { tokens = 5, columns = 512 },
+  { tokens = 64, columns = 32 },
+]
+
+[[launcher]]
+name = "attention"
+cpp = "LaunchAttentionFlat"
+returns = "supported"
+doc = "Bidirectional attention with scale 1 on matrix cores: query and key are `[token][head][column]` BF16 rows, the value is transposed, `[kv head][column][token]` with `(tokens + 31) / 32 * 32` tokens per column as `transpose_values` writes it (value reads run to that stride, so the padding must be finite). A token sees the keys of its own sequence `[sequence_begin, sequence_end)` within `window` positions on either side (zero: the whole sequence). Unsupported unless the head width is 256 or 512, `num_heads` is a multiple of `num_key_value_heads` and `tokens` is positive."
+params = [
+  { name = "query", kind = "in", elem = "bf16", len = "tokens * num_heads * head_dim" },
+  { name = "key", kind = "in", elem = "bf16", len = "key_rows * num_key_value_heads * head_dim" },
+  # Columns `(tokens + 31) / 32 * 32` apart; a bound past `tokens` reads on
+  # into the next column, so the buffer holds the stride of `key_rows`.
+  { name = "value_t", kind = "in", elem = "bf16", len = "num_key_value_heads * head_dim * ((key_rows + 31) / 32 * 32)" },
+  { name = "context", kind = "out", elem = "bf16", len = "tokens * num_heads * head_dim" },
+  { name = "sequence_begin", kind = "indices", len = "tokens", below = "key_rows" },
+  { name = "sequence_end", kind = "indices", len = "tokens", below = "key_rows + 1" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "num_heads", kind = "scalar", type = "u32" },
+  { name = "num_key_value_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  # Rows of `key` (key rows are clamped to `tokens - 1`); the kernel trusts
+  # the bounds to stay below it.
+  { name = "key_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["tokens <= key_rows"]
+probes = [
+  { tokens = 5, num_heads = 4, num_key_value_heads = 2, head_dim = 256, window = 2, key_rows = 7 },
+  { tokens = 40, num_heads = 4, num_key_value_heads = 1, head_dim = 512, window = 0, key_rows = 40 },
+]
+
+[[launcher]]
+name = "geglu"
+cpp = "LaunchGeglu"
+returns = "void"
+doc = "`output = bf16(gelu_tanh(gate) * up)` with gate and up back to back in each `2 * width` f32 row."
+params = [
+  { name = "gate_up", kind = "in", elem = "f32", len = "rows * 2 * width" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 3, width = 2048 },
+  { rows = 2, width = 300 },
+]
+
+[[launcher]]
+name = "ple_gate"
+cpp = "LaunchPleGate"
+returns = "void"
+doc = "`output = bf16(gelu_tanh(gate) * per_layer_input)`."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "count" },
+  { name = "per_layer_input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [
+  { count = 1536 },
+  { count = 257 },
+]
+
+[[launcher]]
+name = "ple_residual"
+cpp = "LaunchPleResidual"
+returns = "void"
+doc = "`state = (state + rmsnorm(update) * weight) * layer_scalar[0]` over each row."
+params = [
+  { name = "update", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "width" },
+  { name = "layer_scalar", kind = "in", elem = "bf16", len = "1" },
+  { name = "state", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+probes = [
+  { rows = 3, width = 512, epsilon = 1e-6 },
+  { rows = 1, width = 300, epsilon = 1e-6 },
+]
+
+[[launcher]]
+name = "mean_pool_normalize"
+cpp = "LaunchMeanPoolNormalize"
+returns = "supported"
+doc = "Mean-pools the rows `[offsets[s], offsets[s + 1])` of `projected` for each sequence and L2-normalises the result. Unsupported for a width above 1,024."
+params = [
+  { name = "projected", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "offsets", kind = "indices", len = "sequences + 1", below = "rows + 1" },
+  { name = "output", kind = "out", elem = "f32", len = "sequences * width" },
+  { name = "sequences", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  # Rows of `projected`; the kernel trusts the offsets to stay within.
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+probes = [
+  { sequences = 3, width = 768, rows = 9 },
+  { sequences = 1, width = 1024, rows = 2 },
+]
+
+# --- Vision tower --------------------------------------------------------------
+# Fixed released geometry: 768 channels, 12 heads of 64, row-major patches.
+
+[[launcher]]
+name = "vision_pixels"
+cpp = "LaunchVisionPixels"
+returns = "void"
+doc = "`bf16(2 * (pixel - 0.5))` of the rescaled patch pixels."
+params = [
+  { name = "pixels", kind = "in", elem = "f32", len = "count" },
+  { name = "bf16", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 2304 }, { count = 7 }]
+
+[[launcher]]
+name = "vision_positions"
+cpp = "LaunchVisionPositions"
+returns = "void"
+doc = "Adds the two axial position embeddings (`table[0][x]`, `table[1][y]`) to the projected patches."
+params = [
+  { name = "projected", kind = "in", elem = "f32", len = "patches * 768" },
+  { name = "table", kind = "in", elem = "bf16", len = "2 * 10240 * 768" },
+  { name = "state", kind = "out", elem = "f32", len = "patches * 768" },
+  { name = "patches", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+# Both axes index the 10,240 rows of their table.
+requires = ["columns >= 1", "columns <= 10240", "patches <= 10240 * columns"]
+probes = [{ patches = 18, columns = 6 }, { patches = 9, columns = 3 }]
+
+[[launcher]]
+name = "vision_qkv"
+cpp = "LaunchVisionQkv"
+returns = "void"
+doc = "Head RMS normalisation of the fused `[patch][q | k | v]` rows (weighted for query and key, unweighted for value), independent x/y axial rotary embedding of query and key, and BF16 rounding."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "patches * 2304" },
+  { name = "query_norm", kind = "in", elem = "bf16", len = "64" },
+  { name = "key_norm", kind = "in", elem = "bf16", len = "64" },
+  { name = "query", kind = "out", elem = "bf16", len = "patches * 768" },
+  { name = "key", kind = "out", elem = "bf16", len = "patches * 768" },
+  { name = "value", kind = "out", elem = "bf16", len = "patches * 768" },
+  { name = "patches", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+requires = ["columns >= 1"]
+probes = [{ patches = 18, columns = 6 }]
+
+[[launcher]]
+name = "vision_attention"
+cpp = "LaunchVisionAttention"
+returns = "void"
+doc = "Full bidirectional attention over the patches, `[patch][head][64]` BF16."
+params = [
+  { name = "query", kind = "in", elem = "bf16", len = "patches * 768" },
+  { name = "key", kind = "in", elem = "bf16", len = "patches * 768" },
+  { name = "value", kind = "in", elem = "bf16", len = "patches * 768" },
+  { name = "context", kind = "out", elem = "bf16", len = "patches * 768" },
+  { name = "patches", kind = "scalar", type = "usize" },
+]
+probes = [{ patches = 18 }, { patches = 1 }]
+
+[[launcher]]
+name = "vision_pool"
+cpp = "LaunchVisionPool"
+returns = "void"
+doc = "Spatial 3x3 average, sqrt(768) scaling and the projector's input RMS norm: one BF16 soft token per 3x3 block of patches."
+params = [
+  { name = "state", kind = "in", elem = "f32", len = "rows * columns * 768" },
+  { name = "pooled", kind = "out", elem = "bf16", len = "rows * columns / 9 * 768" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+]
+requires = ["rows % 3 == 0", "columns % 3 == 0", "columns >= 3"]
+probes = [{ rows = 6, columns = 9 }, { rows = 3, columns = 3 }]
+
+[[launcher]]
+name = "vision_insert"
+cpp = "LaunchVisionInsert"
+returns = "void"
+doc = "Replaces placeholder rows with projected image or audio features: the BF16 rounding in the per-layer input copy and its value in the f32 residual stream."
+params = [
+  { name = "features", kind = "in", elem = "f32", len = "tokens * 512" },
+  { name = "state", kind = "out", elem = "f32", len = "tokens * 512" },
+  { name = "embeddings", kind = "out", elem = "bf16", len = "tokens * 512" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+]
+probes = [{ tokens = 6 }, { tokens = 1 }]
+
+# --- Audio tower ---------------------------------------------------------------
+# Float32 throughout, checkpoint weights widened from BF16 at load.
+
+[[launcher]]
+name = "audio_norm"
+cpp = "LaunchAudioNorm"
+returns = "void"
+doc = "One wave per row: RMS norm (`centered`: layer norm followed by ReLU), optionally clipping the input to ±1e10, scaled by `weight` when present."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width", optional = true },
+  { name = "y", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "width", kind = "scalar", type = "i32" },
+  { name = "centered", kind = "scalar", type = "bool" },
+  { name = "clipped", kind = "scalar", type = "bool" },
+]
+probes = [
+  { rows = 3, width = 1024, centered = false, clipped = true },
+  { rows = 2, width = 1536, centered = false, clipped = false },
+]
+
+[[launcher]]
+name = "audio_norm_in_place"
+cpp = "LaunchAudioNormInPlace"
+returns = "void"
+doc = "`audio_norm` with the output over its input."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width", optional = true },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "width", kind = "scalar", type = "i32" },
+  { name = "centered", kind = "scalar", type = "bool" },
+  { name = "clipped", kind = "scalar", type = "bool" },
+]
+probes = [
+  { rows = 4, width = 128, centered = true, clipped = false },
+  { rows = 2, width = 1024, centered = false, clipped = true },
+]
+
+[[launcher]]
+name = "audio_activate"
+cpp = "LaunchAudioActivate"
+returns = "void"
+doc = "SiLU in place."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "i32" },
+]
+probes = [{ count = 4096 }, { count = 5 }]
+
+[[launcher]]
+name = "audio_residual"
+cpp = "LaunchAudioResidual"
+returns = "void"
+doc = "`state += update * scale`."
+params = [
+  { name = "state", kind = "inout", elem = "f32", len = "count" },
+  { name = "update", kind = "in", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "i32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+probes = [{ count = 2048, scale = 0.5 }]
+
+[[launcher]]
+name = "audio_clip"
+cpp = "LaunchAudioClip"
+returns = "void"
+doc = "`y = clamp(x, low, high)`: the clipped linears' input bounds."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "count" },
+  { name = "y", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "i32" },
+  { name = "low", kind = "scalar", type = "f32" },
+  { name = "high", kind = "scalar", type = "f32" },
+]
+probes = [{ count = 1024, low = -1.0, high = 1.0 }]
+
+[[launcher]]
+name = "audio_clip_in_place"
+cpp = "LaunchAudioClipInPlace"
+returns = "void"
+doc = "`audio_clip` in place: the clipped linears' output bounds."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "i32" },
+  { name = "low", kind = "scalar", type = "f32" },
+  { name = "high", kind = "scalar", type = "f32" },
+]
+probes = [{ count = 1024, low = -1.0, high = 1.0 }]
+
+[[launcher]]
+name = "audio_conv2d"
+cpp = "LaunchAudioConv2d"
+returns = "void"
+doc = "Stride-2 3x3 subsampling convolution in channels-last layout; input time rows at or past `valid_frames` count as zero."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "frames * bins * in_channels" },
+  { name = "w", kind = "in", elem = "f32", len = "out_channels * in_channels * 9" },
+  { name = "y", kind = "out", elem = "f32", len = "(frames + 1) / 2 * ((bins + 1) / 2) * out_channels" },
+  { name = "frames", kind = "scalar", type = "i32" },
+  { name = "bins", kind = "scalar", type = "i32" },
+  { name = "in_channels", kind = "scalar", type = "i32" },
+  { name = "out_channels", kind = "scalar", type = "i32" },
+  { name = "valid_frames", kind = "scalar", type = "i32" },
+]
+probes = [
+  { frames = 9, bins = 128, in_channels = 1, out_channels = 128, valid_frames = 7 },
+  { frames = 5, bins = 64, in_channels = 128, out_channels = 32, valid_frames = 5 },
+]
+
+[[launcher]]
+name = "audio_glu"
+cpp = "LaunchAudioGlu"
+returns = "void"
+doc = "Gated linear unit of 2,048-wide rows into 1,024-wide rows: `a * sigmoid(b)`."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * 2048" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * 1024" },
+  { name = "rows", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 3 }]
+
+[[launcher]]
+name = "audio_depthwise"
+cpp = "LaunchAudioDepthwise"
+returns = "void"
+doc = "Causal depthwise convolution with five taps over 1,024 channels."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * 1024" },
+  { name = "w", kind = "in", elem = "f32", len = "1024 * 5" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * 1024" },
+  { name = "rows", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 6 }, { rows = 1 }]
+
+[[launcher]]
+name = "audio_attention"
+cpp = "LaunchAudioAttention"
+returns = "void"
+doc = "Chunked local attention (chunks of 12, 12 keys of left context, logit cap 50) with relative positions over eight heads of 128 channels; keys at or past `valid` are masked."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * 1024" },
+  { name = "k", kind = "in", elem = "f32", len = "rows * 1024" },
+  { name = "v", kind = "in", elem = "f32", len = "rows * 1024" },
+  { name = "relative", kind = "in", elem = "f32", len = "13 * 1024" },
+  { name = "dim_scale", kind = "in", elem = "f32", len = "128" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * 1024" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "valid", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 30, valid = 27 }, { rows = 1, valid = 1 }]
+
+[[launcher]]
+name = "audio_bias"
+cpp = "LaunchAudioBias"
+returns = "void"
+doc = "Adds the output projection's bias to 1,536-wide rows."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * 1536" },
+  { name = "bias", kind = "in", elem = "f32", len = "1536" },
+  { name = "rows", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 4 }]

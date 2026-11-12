@@ -1,0 +1,31 @@
+[package]
+name = "gufo-omnivoice"
+version = "0.1.0"
+description = "OmniVoice text-to-speech (k2-fsa) on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The kernels and reference tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-omnivoice --features gpu
+gpu = []
+# Tests that need the model directory (GUFO_OMNIVOICE_MODEL): --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-hip.workspace = true
+gufo-omnivoice-kernels = { path = "kernels" }
+# NFC of the tokenizer and Unicode categories of the text helpers (ICU in
+# the C++ extension).
+unicode-normalization.workspace = true
+unicode-properties.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

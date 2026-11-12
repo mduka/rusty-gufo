@@ -1,0 +1,30 @@
+[package]
+name = "gufo-nemotron"
+version = "0.1.0"
+description = "NVIDIA Nemotron-H (Nemotron 3.5 Bolt 74B-A9B) text and image generation on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The kernels and reference tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-nemotron --features gpu
+gpu = []
+# Tests that need the released files (GUFO_NEMOTRON_BOLT_GGUF): --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-formats.workspace = true
+gufo-hip.workspace = true
+gufo-nemotron-kernels = { path = "kernels" }
+sha2.workspace = true
+unicode-properties.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

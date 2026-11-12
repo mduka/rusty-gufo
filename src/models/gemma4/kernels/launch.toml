@@ -1,0 +1,2165 @@
+# Kernel contract for the Gemma 4 kernels (docs/development/DESIGN.md). Extents are element
+# counts (bytes for `bytes`); the launchers take `hipStream_t` last. Trusted
+# base: a wrong extent compiles and lets a kernel overrun its buffer. Review
+# changes like unsafe code; every launcher needs probes (tests/extents.rs).
+#
+# The kernels are the extension's (franzmoca/gemma4-gufo-extension a31ce42),
+# compiled with its CMake target's flags. The flat adapters of
+# rocm/adapters.hpp take the place of its argument structs.
+#
+# Block sizes: Q4_0 18 bytes per 32 values, Q8_0 34, Q4_K 144 per 256, Q5_K
+# 176, Q6_K 210. Tiled Q8_1 activations take 640 bytes per 16 rows and 32
+# values (576 of codes and scales, 64 of sums), and the prefill GEMMs read
+# whole 128-row tiles of them. A WMMA projection's scratch holds its
+# activation pack (68 bytes per input value) and 3 MiB of split partials.
+#
+# Caches are binary16 rows per key: K (or, for derived keys, the rotated
+# dims only: 2 * rope_pairs values per KV head) and V. Keys of a ring cache
+# sit at slot key % ring; the trunk's global caches pass ring = their slot
+# count to the launchers that take a ring (the same slot for every key below
+# it) and their slot count to the linear attention launchers.
+
+[library]
+name = "gemma4"
+root = "../../../.."
+namespace = "gufo::models::gemma4::rocm"
+format_type = "gufo::core::GgmlType"
+headers = [
+  "src/models/gemma4/kernels/rocm/adapters.hpp",
+  "src/models/gemma4/kernels/rocm/gemv.hpp",
+  "src/models/gemma4/kernels/rocm/half_gemm.hpp",
+  "src/models/gemma4/kernels/rocm/kernels.hpp",
+  "src/models/gemma4/kernels/rocm/moe.hpp",
+  "src/models/gemma4/kernels/rocm/ggml/gemm.hpp",
+  "src/models/gemma4/kernels/rocm/ggml/token.hpp",
+]
+
+# The extension's gufo_gemma4_hip sources (extension.cmake), over the preset's
+# -O2 -g -DNDEBUG: fast math with finite-math checks kept ...
+[[source]]
+path = "src/models/gemma4/kernels/rocm/candidates.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/kernels.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/moe_prefill.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/half_gemm.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+# ... vision/encoder.hip, whose kernels adapters_vision.hip includes ...
+[[source]]
+path = "src/models/gemma4/kernels/rocm/adapters_vision.hip"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument"]
+# ... strict floating point for the decode and prefill attention and
+# projections ...
+[[source]]
+path = "src/models/gemma4/kernels/rocm/attention_wmma.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument", "-fno-fast-math", "-ffp-contract=off"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/gemv.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument", "-fno-fast-math", "-ffp-contract=off"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/moe.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument", "-fno-fast-math", "-ffp-contract=off"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/wmma_gemv.hip.cpp"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-Wno-unused-command-line-argument", "-fno-fast-math", "-ffp-contract=off"]
+# ... the GGML kernels at the preset's flags ...
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/argmax.hip.cpp"
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/gemv.hip.cpp"
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/gemv_quant.hip.cpp"
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/prefill_embed.hip.cpp"
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/prefill_quant_gemm.hip.cpp"
+flags = ["-fno-slp-vectorize"]
+[[source]]
+path = "src/models/gemma4/kernels/rocm/ggml/prefill_quant_wave64.hip.cpp"
+flags = ["-mwavefrontsize64", "-fno-slp-vectorize"]
+# The adapters (C++ of this port, at the preset's flags; the routing table
+# kernels are integer only).
+[[source]]
+path = "src/models/gemma4/kernels/rocm/adapters.hip"
+[[source]]
+path = "src/models/gemma4/kernels/rocm/adapters_routing.hip"
+
+# --- Norms (kernels.hpp) -----------------------------------------------------
+
+[[launcher]]
+name = "scale_rms_norm"
+cpp = "ScaleRmsNorm"
+returns = "void"
+doc = "`x[r] *= scale; h[r] = rms(x[r]) * weight`: the scaled token embedding and the first attention norm."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * dim" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim" },
+  { name = "h", kind = "out", elem = "f32", len = "rows * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1", "dim >= 1"]
+probes = [
+  { scale = 2.0, rows = 3, dim = 2816, eps = 1e-6 },
+  { scale = 1.0, rows = 1, dim = 1, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "RmsNorm"
+returns = "void"
+doc = "`y[r] = rms(x[r]) * weight` (no weight: `rms(x[r])`)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "weight", kind = "in", elem = "f32", len = "dim", optional = true },
+  { name = "y", kind = "out", elem = "f32", len = "rows * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1", "dim >= 1"]
+probes = [
+  { rows = 3, dim = 2816, eps = 1e-6, with = ["weight"] },
+  { rows = 1, dim = 7, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "post_attention_norm"
+cpp = "flat::PostAttentionNorm"
+returns = "supported"
+doc = "`x[r] += rms(o[r]) * post_norm; h[r] = rms(x[r]) * next_norm`, `h` as F32 rows, binary16 rows (`h_half`) and/or the tiled Q8_1 prefill activation (`q8`, which replaces both); with `pack_scratch` (decode rows: no `q8`, 16 rows at most) the h rows also fill the activation pack of a WMMA projection of width `dim`."
+params = [
+  { name = "o", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "post_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "x", kind = "inout", elem = "f32", len = "rows * dim" },
+  { name = "next_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "h", kind = "out", elem = "f32", len = "rows * dim", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "q8", kind = "out", elem = "bytes", len = "((rows + 15) / 16) * (dim / 32) * 640", optional = true },
+  { name = "second_norm", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "h2", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "h_half", kind = "out", elem = "f16", len = "rows * dim", optional = true },
+  { name = "h2_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * dim", optional = true },
+]
+requires = ["rows >= 1", "dim >= 32", "dim <= 6144", "dim % 32 == 0"]
+probes = [
+  { rows = 3, dim = 2816, eps = 1e-6, with = ["h", "h_half", "pack_scratch"] },
+  { rows = 40, dim = 5376, eps = 1e-6, with = ["q8"] },
+  { rows = 17, dim = 64, eps = 1e-6, with = ["h"] },
+]
+
+[[launcher]]
+name = "post_attention_norm_moe"
+cpp = "flat::PostAttentionNorm"
+returns = "supported"
+doc = "`post_attention_norm` of an expert layer, which also writes the experts' input `h2[r] = rms(x[r]) * second_norm` as F32 and/or binary16 rows."
+params = [
+  { name = "o", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "post_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "x", kind = "inout", elem = "f32", len = "rows * dim" },
+  { name = "next_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "h", kind = "out", elem = "f32", len = "rows * dim", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "q8", kind = "out", elem = "bytes", len = "((rows + 15) / 16) * (dim / 32) * 640", optional = true },
+  { name = "second_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "h2", kind = "out", elem = "f32", len = "rows * dim", optional = true },
+  { name = "h_half", kind = "out", elem = "f16", len = "rows * dim", optional = true },
+  { name = "h2_half", kind = "out", elem = "f16", len = "rows * dim", optional = true },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * dim", optional = true },
+]
+requires = ["rows >= 1", "dim >= 32", "dim <= 6144", "dim % 32 == 0"]
+probes = [
+  { rows = 3, dim = 2816, eps = 1e-6, with = ["h", "h2", "pack_scratch"] },
+  { rows = 40, dim = 2816, eps = 1e-6, with = ["h_half", "h2_half"] },
+]
+
+[[launcher]]
+name = "post_feed_forward_norm"
+cpp = "flat::PostFeedForwardNorm"
+returns = "supported"
+doc = "`x[r] = (x[r] + rms(f[r]) * post_norm) * scale; h[r] = rms(x[r]) * next_norm` (no `next_norm`: no h), `h` as in `post_attention_norm`."
+params = [
+  { name = "f", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "post_norm", kind = "in", elem = "f32", len = "dim" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "x", kind = "inout", elem = "f32", len = "rows * dim" },
+  { name = "next_norm", kind = "in", elem = "f32", len = "dim", optional = true },
+  { name = "h", kind = "out", elem = "f32", len = "rows * dim", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "q8", kind = "out", elem = "bytes", len = "((rows + 15) / 16) * (dim / 32) * 640", optional = true },
+  { name = "h_half", kind = "out", elem = "f16", len = "rows * dim", optional = true },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * dim", optional = true },
+]
+requires = ["rows >= 1", "dim >= 32", "dim <= 6144", "dim % 32 == 0"]
+probes = [
+  { scale = 0.5, rows = 3, dim = 2816, eps = 1e-6, with = ["next_norm", "h", "pack_scratch"] },
+  { scale = 1.0, rows = 33, dim = 5376, eps = 1e-6, with = ["next_norm", "q8"] },
+  { scale = 1.0, rows = 2, dim = 64, eps = 1e-6 },
+]
+
+# --- Q/K/V post-processing (kernels.hpp) -------------------------------------
+
+[[launcher]]
+name = "qkv_post"
+cpp = "flat::QkvPostInPlace"
+returns = "supported"
+doc = "Per head: `q = rope(rms(q) * q_norm)` in place; K = rope(rms(k) * k_norm) and V = rms(v) as binary16 into the caches at slot key % ring (key: the row's position, or `spare_key + i` for sibling i of the last `siblings` rows). `v` may be a view of `k` (global layers' shared projection); V rows are `v_stride` floats apart."
+params = [
+  { name = "q", kind = "inout", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "rows * kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "(rows - 1) * v_stride + kv_heads * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "theta_scale", kind = "scalar", type = "f32" },
+  { name = "freq_factors", kind = "in", elem = "f32", len = "head_dim / 2", optional = true },
+  { name = "k_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "v_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "rotated_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "v_stride", kind = "scalar", type = "u32" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "heads >= 1", "kv_heads >= 1", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "ring >= 1", "v_stride >= 1", "siblings < rows"]
+probes = [
+  { theta_scale = 0.9, rows = 3, heads = 16, kv_heads = 8, head_dim = 256, first_position = 70, ring = 64, eps = 1e-6, v_stride = 2048, siblings = 1, spare_key = 72, with = ["freq_factors"] },
+  { theta_scale = 0.9, rows = 20, heads = 16, kv_heads = 2, head_dim = 512, first_position = 0, ring = 20, eps = 1e-6, v_stride = 1024, siblings = 0, spare_key = 0 },
+]
+
+[[launcher]]
+name = "qkv_post_derived"
+cpp = "flat::QkvPostInPlace"
+returns = "supported"
+doc = "`qkv_post` for a derived-key layer: V is the normalized K projection, the K cache keeps only the rotated dims (`rotated_pairs` of each half head) and the unrotated query dims carry `k_norm`."
+params = [
+  { name = "q", kind = "inout", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "rows * kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "(rows - 1) * v_stride + kv_heads * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "theta_scale", kind = "scalar", type = "f32" },
+  { name = "freq_factors", kind = "in", elem = "f32", len = "head_dim / 2", optional = true },
+  { name = "k_cache", kind = "out", elem = "f16", len = "ring * kv_heads * 2 * rotated_pairs" },
+  { name = "v_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "rotated_pairs", kind = "scalar", type = "u32" },
+  { name = "v_stride", kind = "scalar", type = "u32" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "heads >= 1", "kv_heads >= 1", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "ring >= 1", "v_stride >= 1", "siblings < rows", "rotated_pairs >= 1", "rotated_pairs * 2 <= head_dim"]
+probes = [
+  { theta_scale = 0.9, rows = 3, heads = 16, kv_heads = 2, head_dim = 512, first_position = 70, ring = 80, eps = 1e-6, rotated_pairs = 64, v_stride = 1024, siblings = 1, spare_key = 73, with = ["freq_factors"] },
+]
+
+[[launcher]]
+name = "qkv_post_fused"
+cpp = "flat::QkvPostFused"
+returns = "supported"
+doc = "`qkv_post` over the rows of a fused [q | k | v] projection (`row_stride` floats apart; V rows `v_stride` apart): the processed Q goes to `q_out` ([rows][heads * head_dim])."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "(rows - 1) * row_stride + heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "(rows - 1) * row_stride + kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "(rows - 1) * v_stride + kv_heads * head_dim" },
+  { name = "q_out", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "theta_scale", kind = "scalar", type = "f32" },
+  { name = "freq_factors", kind = "in", elem = "f32", len = "head_dim / 2", optional = true },
+  { name = "k_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "v_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "rotated_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "row_stride", kind = "scalar", type = "u32" },
+  { name = "v_stride", kind = "scalar", type = "u32" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "heads >= 1", "kv_heads >= 1", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "ring >= 1", "row_stride >= 1", "v_stride >= 1", "siblings < rows"]
+probes = [
+  { theta_scale = 0.9, rows = 3, heads = 16, kv_heads = 8, head_dim = 256, first_position = 5, ring = 64, eps = 1e-6, row_stride = 8192, v_stride = 8192, siblings = 0, spare_key = 0 },
+]
+
+[[launcher]]
+name = "qkv_post_fused_derived"
+cpp = "flat::QkvPostFused"
+returns = "supported"
+doc = "`qkv_post_fused` for a derived-key layer (`qkv_post_derived`)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "(rows - 1) * row_stride + heads * head_dim" },
+  { name = "k", kind = "in", elem = "f32", len = "(rows - 1) * row_stride + kv_heads * head_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "(rows - 1) * v_stride + kv_heads * head_dim" },
+  { name = "q_out", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "theta_scale", kind = "scalar", type = "f32" },
+  { name = "freq_factors", kind = "in", elem = "f32", len = "head_dim / 2", optional = true },
+  { name = "k_cache", kind = "out", elem = "f16", len = "ring * kv_heads * 2 * rotated_pairs" },
+  { name = "v_cache", kind = "out", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "rotated_pairs", kind = "scalar", type = "u32" },
+  { name = "row_stride", kind = "scalar", type = "u32" },
+  { name = "v_stride", kind = "scalar", type = "u32" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "heads >= 1", "kv_heads >= 1", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "ring >= 1", "row_stride >= 1", "v_stride >= 1", "siblings < rows", "rotated_pairs >= 1", "rotated_pairs * 2 <= head_dim"]
+probes = [
+  { theta_scale = 0.9, rows = 2, heads = 16, kv_heads = 2, head_dim = 512, first_position = 9, ring = 40, eps = 1e-6, rotated_pairs = 64, row_stride = 9216, v_stride = 9216, siblings = 0, spare_key = 0, with = ["freq_factors"] },
+]
+
+[[launcher]]
+name = "query_post"
+cpp = "flat::QueryPost"
+returns = "supported"
+doc = "Drafter queries: `q = rope(rms(q) * q_norm)` in place at `position` (or `position + row`); with `rotated_pairs` (the target layer's derived keys) the unrotated dims are multiplied by `key_weight`."
+params = [
+  { name = "q", kind = "inout", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "head_dim", optional = true },
+  { name = "theta_scale", kind = "scalar", type = "f32" },
+  { name = "freq_factors", kind = "in", elem = "f32", len = "head_dim / 2", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "key_weight", kind = "in", elem = "f32", len = "head_dim" },
+  { name = "rotated_pairs", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "heads >= 1", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "rotated_pairs * 2 <= head_dim"]
+probes = [
+  { theta_scale = 0.9, rows = 1, heads = 16, head_dim = 512, position = 100, shared_position = true, eps = 1e-6, rotated_pairs = 64, with = ["q_norm", "freq_factors"] },
+  { theta_scale = 0.9, rows = 3, heads = 4, head_dim = 256, position = 7, shared_position = false, eps = 1e-6, rotated_pairs = 0 },
+]
+
+[[launcher]]
+name = "draft_concat"
+cpp = "flat::DraftConcat"
+returns = "supported"
+doc = "MTP drafter input: `out[2 r] = embed[r] * scale`, `out[2 r + 1] = hidden[r]` (rows of `dim`)."
+params = [
+  { name = "embed", kind = "in", elem = "f32", len = "rows * dim" },
+  { name = "hidden", kind = "in", elem = "f32", list = "rows", len = "dim" },
+  { name = "out", kind = "out", elem = "f32", len = "2 * rows * dim" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "rows <= 8", "dim >= 1"]
+probes = [
+  { scale = 2.0, rows = 3, dim = 2816 },
+  { scale = 1.0, rows = 8, dim = 1 },
+]
+
+# --- Attention (kernels.hpp) -------------------------------------------------
+#
+# Decode and verification rows (16 at most) split keys into chunks of 128
+# (head_dim 256) or 512 (head_dim 512) keys and merge them; `partials` holds
+# (head_dim + 2) floats per row, head and chunk. Prefill rows (17 and more)
+# take the WMMA kernels or the single-pass fallback. Row r sits at
+# first_position + r (all at first_position with `shared_position`), or, for
+# sibling i of the last `siblings` rows, at first_position + 1 + i with its
+# own key at spare_key + i; it attends keys [lo, hi) with hi = min(position
+# + 1 (raised to key_ends[r] where given), key_limit) and lo = hi - window
+# when `window` is nonzero. Head h reads KV head h / (heads / kv_heads).
+
+[[launcher]]
+name = "attention_ring"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "Split attention of up to 16 rows over a sliding layer's ring caches (head_dim 256, two query heads per KV head); with `pack_scratch` the output rows also fill rows pack_row0.. of the activation pack of the output projection (width heads * head_dim)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "partials", kind = "out", elem = "f32", len = "rows * heads * (partial_keys / 128 + 2) * (head_dim + 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "rope_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "key_ends", kind = "in", elem = "u32", len = "rows", optional = true },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * heads * head_dim", optional = true },
+  { name = "pack_row0", kind = "scalar", type = "u32" },
+  { name = "partial_keys", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "rows <= 16", "head_dim == 256", "kv_heads >= 1", "heads == 2 * kv_heads", "ring >= 1", "window >= 1", "window + rows <= partial_keys", "2 * siblings < rows", "pack_row0 + rows <= 16"]
+probes = [
+  { rows = 1, heads = 16, kv_heads = 8, head_dim = 256, first_position = 1000, shared_position = false, key_limit = 4294967295, window = 1024, ring = 1100, siblings = 0, spare_key = 0, pack_row0 = 0, partial_keys = 1100, with = ["pack_scratch"] },
+  { rows = 5, heads = 16, kv_heads = 8, head_dim = 256, first_position = 30, shared_position = false, key_limit = 4294967295, window = 1024, ring = 1100, siblings = 2, spare_key = 33, pack_row0 = 0, partial_keys = 1100, key_ends = 0, with = ["key_ends"] },
+  { rows = 1, heads = 16, kv_heads = 8, head_dim = 256, first_position = 5000, shared_position = true, key_limit = 5000, window = 1024, ring = 1100, siblings = 0, spare_key = 0, pack_row0 = 0, partial_keys = 1100 },
+]
+
+[[launcher]]
+name = "attention_ring_prefill"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "Prefill attention (17 rows and more) over a sliding layer's ring caches (head_dim 256), F32 and/or binary16 output rows."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "ring * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim", optional = true },
+  { name = "partials", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "scalar", type = "u32" },
+  { name = "rope_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "key_ends", kind = "in", elem = "u32", len = "rows", optional = true },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * heads * head_dim", optional = true },
+  { name = "siblings", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "spare_key", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "pack_scratch", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_row0", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+]
+requires = ["rows >= 17", "head_dim == 256", "kv_heads >= 1", "heads % kv_heads == 0", "heads >= kv_heads", "ring >= 1"]
+probes = [
+  { rows = 40, heads = 16, kv_heads = 8, head_dim = 256, first_position = 0, shared_position = false, key_limit = 4294967295, window = 1024, ring = 2048, with = ["out", "out_half"] },
+  { rows = 33, heads = 16, kv_heads = 8, head_dim = 256, first_position = 3000, shared_position = false, key_limit = 4294967295, window = 1024, ring = 1100, key_ends = 3020, with = ["out_half", "key_ends"] },
+  { rows = 17, heads = 3, kv_heads = 1, head_dim = 256, first_position = 2, shared_position = false, key_limit = 4294967295, window = 1024, ring = 64, with = ["out"] },
+]
+
+[[launcher]]
+name = "attention_linear"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "Split attention of up to 16 rows over linear caches of `slots` keys (head_dim 256 with two, or 512 with eight query heads per KV head), `pack_scratch` as in `attention_ring`."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "partials", kind = "out", elem = "f32", len = "rows * heads * ((slots + head_dim * head_dim / 512 - 1) / (head_dim * head_dim / 512) + 1) * (head_dim + 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "rope_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "key_ends", kind = "const", cpp_type = "const std::uint32_t*", value = "nullptr" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * heads * head_dim", optional = true },
+  { name = "pack_row0", kind = "scalar", type = "u32" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "rows <= 16", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "kv_heads >= 1", "heads == kv_heads * (head_dim * head_dim / 32768)", "first_position + rows <= slots", "spare_key + siblings <= slots", "2 * siblings < rows", "pack_row0 + rows <= 16"]
+probes = [
+  { rows = 1, heads = 16, kv_heads = 2, head_dim = 512, first_position = 1500, shared_position = false, key_limit = 4294967295, window = 0, siblings = 0, spare_key = 0, pack_row0 = 0, slots = 2048, with = ["pack_scratch"] },
+  { rows = 7, heads = 16, kv_heads = 2, head_dim = 512, first_position = 600, shared_position = false, key_limit = 4294967295, window = 0, siblings = 3, spare_key = 604, pack_row0 = 0, slots = 640 },
+  { rows = 12, heads = 16, kv_heads = 2, head_dim = 512, first_position = 3000, shared_position = false, key_limit = 4294967295, window = 0, siblings = 0, spare_key = 0, pack_row0 = 0, slots = 3012 },
+  { rows = 4, heads = 16, kv_heads = 8, head_dim = 256, first_position = 300, shared_position = false, key_limit = 4294967295, window = 0, siblings = 1, spare_key = 303, pack_row0 = 2, slots = 320, with = ["pack_scratch"] },
+]
+
+[[launcher]]
+name = "attention_linear_prefill"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "Prefill attention (17 rows and more) over linear caches of `slots` keys (head_dim 256 or 512)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim", optional = true },
+  { name = "partials", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "rope_pairs", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "key_ends", kind = "const", cpp_type = "const std::uint32_t*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * heads * head_dim", optional = true },
+  { name = "siblings", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "spare_key", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "pack_scratch", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_row0", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 17", "head_dim >= 256", "head_dim <= 512", "head_dim % 256 == 0", "kv_heads >= 1", "heads % kv_heads == 0", "heads >= kv_heads", "first_position + rows <= slots"]
+probes = [
+  { rows = 40, heads = 16, kv_heads = 2, head_dim = 512, first_position = 10, shared_position = false, key_limit = 4294967295, window = 0, slots = 50, with = ["out", "out_half"] },
+  { rows = 20, heads = 16, kv_heads = 8, head_dim = 256, first_position = 0, shared_position = false, key_limit = 4294967295, window = 0, slots = 20, with = ["out"] },
+]
+
+[[launcher]]
+name = "attention_derived"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "`attention_linear` over a derived-key layer's caches (head_dim 512, eight query heads per KV head): the K cache holds the 64 rotated pairs of each key, V the normalized K projection."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "slots * kv_heads * 2 * rope_pairs" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "partials", kind = "out", elem = "f32", len = "rows * heads * ((slots + 511) / 512 + 1) * (head_dim + 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "rope_pairs", kind = "scalar", type = "u32" },
+  { name = "key_ends", kind = "const", cpp_type = "const std::uint32_t*", value = "nullptr" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "siblings", kind = "scalar", type = "u32" },
+  { name = "spare_key", kind = "scalar", type = "u32" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * heads * head_dim", optional = true },
+  { name = "pack_row0", kind = "scalar", type = "u32" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "rows <= 16", "head_dim == 512", "kv_heads >= 1", "heads == 8 * kv_heads", "rope_pairs == 64", "first_position + rows <= slots", "spare_key + siblings <= slots", "2 * siblings < rows", "pack_row0 + rows <= 16"]
+probes = [
+  { rows = 1, heads = 16, kv_heads = 2, head_dim = 512, first_position = 700, shared_position = false, key_limit = 4294967295, window = 0, rope_pairs = 64, siblings = 0, spare_key = 0, pack_row0 = 0, slots = 701, with = ["pack_scratch"] },
+  { rows = 5, heads = 16, kv_heads = 2, head_dim = 512, first_position = 64, shared_position = false, key_limit = 4294967295, window = 0, rope_pairs = 64, siblings = 2, spare_key = 67, pack_row0 = 0, slots = 69 },
+  { rows = 1, heads = 16, kv_heads = 2, head_dim = 512, first_position = 300, shared_position = true, key_limit = 300, window = 0, rope_pairs = 64, siblings = 0, spare_key = 0, pack_row0 = 0, slots = 301 },
+]
+
+[[launcher]]
+name = "attention_derived_prefill"
+cpp = "flat::Attention"
+returns = "supported"
+doc = "Prefill attention (17 rows and more) over a derived-key layer's caches (`attention_derived`)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "slots * kv_heads * 2 * rope_pairs" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "slots * kv_heads * head_dim" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * head_dim", optional = true },
+  { name = "partials", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "heads", kind = "scalar", type = "u32" },
+  { name = "kv_heads", kind = "scalar", type = "u32" },
+  { name = "head_dim", kind = "scalar", type = "u32" },
+  { name = "first_position", kind = "scalar", type = "u32" },
+  { name = "shared_position", kind = "scalar", type = "bool" },
+  { name = "key_limit", kind = "scalar", type = "u32" },
+  { name = "window", kind = "scalar", type = "u32" },
+  { name = "ring", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "rope_pairs", kind = "scalar", type = "u32" },
+  { name = "key_ends", kind = "const", cpp_type = "const std::uint32_t*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * heads * head_dim", optional = true },
+  { name = "siblings", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "spare_key", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "pack_scratch", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_row0", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 17", "head_dim == 512", "kv_heads >= 1", "heads % kv_heads == 0", "heads >= kv_heads", "rope_pairs == 64", "first_position + rows <= slots"]
+probes = [
+  { rows = 40, heads = 16, kv_heads = 2, head_dim = 512, first_position = 100, shared_position = false, key_limit = 4294967295, window = 0, rope_pairs = 64, slots = 140, with = ["out_half"] },
+  { rows = 17, heads = 16, kv_heads = 2, head_dim = 512, first_position = 0, shared_position = false, key_limit = 4294967295, window = 0, rope_pairs = 64, slots = 17, with = ["out"] },
+]
+
+# --- Feed-forward elementwise (kernels.hpp) ----------------------------------
+
+[[launcher]]
+name = "geglu"
+cpp = "GeGlu"
+returns = "void"
+doc = "`out = gelu_tanh(gate) * up`, elementwise."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "count" },
+  { name = "up", kind = "in", elem = "f32", len = "count" },
+  { name = "out", kind = "out", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 2112 }, { count = 1 }]
+
+[[launcher]]
+name = "geglu_in_place"
+cpp = "GeGlu"
+returns = "void"
+doc = "`out = gelu_tanh(out) * up` in place (the gate rows), elementwise."
+params = [
+  { name = "gate", kind = "alias", elem = "f32", of = "out", read_only = true },
+  { name = "up", kind = "in", elem = "f32", len = "count" },
+  { name = "out", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 2112 }]
+
+[[launcher]]
+name = "geglu_quantize"
+cpp = "GeGluQuantize"
+returns = "void"
+doc = "`gelu_tanh(gate) * up` over [rows][cols], written as the tiled Q8_1 prefill activation."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "up", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "q8", kind = "out", elem = "bytes", len = "((rows + 15) / 16) * (cols / 32) * 640" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "cols", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "cols >= 32", "cols % 32 == 0"]
+probes = [{ rows = 20, cols = 2112 }, { rows = 1, cols = 32 }]
+
+[[launcher]]
+name = "geglu_packed"
+cpp = "flat::GeGluPacked"
+returns = "supported"
+doc = "`out[s][i] = gelu_tanh(gu[s][i]) * gu[s][width + i]` over fused [gate | up] rows, as F32 and/or binary16 (`out_half`) rows."
+params = [
+  { name = "gu", kind = "in", elem = "f32", len = "slots * 2 * width" },
+  { name = "out", kind = "out", elem = "f32", len = "slots * width", optional = true },
+  { name = "slots", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "out_half", kind = "out", elem = "f16", len = "slots * width", optional = true },
+  { name = "pack_scratch", kind = "const", cpp_type = "void*", value = "nullptr" },
+]
+requires = ["slots >= 1", "width >= 1"]
+probes = [
+  { slots = 9, width = 704, with = ["out", "out_half"] },
+  { slots = 1, width = 3, with = ["out"] },
+]
+
+[[launcher]]
+name = "geglu_packed_pack"
+cpp = "flat::GeGluPacked"
+returns = "supported"
+doc = "`geglu_packed` of decode rows (16 at most) whose F32 rows also fill the activation pack of the down projection (width `width`)."
+params = [
+  { name = "gu", kind = "in", elem = "f32", len = "slots * 2 * width" },
+  { name = "out", kind = "out", elem = "f32", len = "slots * width" },
+  { name = "slots", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * width" },
+]
+requires = ["slots >= 1", "slots <= 16", "width >= 32", "width % 32 == 0"]
+probes = [{ slots = 3, width = 2112 }, { slots = 16, width = 32 }]
+
+[[launcher]]
+name = "geglu_packed_half"
+cpp = "GeGluPackedHalf"
+returns = "void"
+doc = "`geglu_packed` over binary16 rows, saturated to the binary16 range."
+params = [
+  { name = "gu", kind = "in", elem = "f16", len = "slots * 2 * width" },
+  { name = "out", kind = "out", elem = "f16", len = "slots * width" },
+  { name = "slots", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["slots >= 1", "width >= 1"]
+probes = [{ slots = 40, width = 704 }]
+
+[[launcher]]
+name = "softcap"
+cpp = "Softcap"
+returns = "void"
+doc = "`logits = cap * tanh(logits / cap)`, elementwise."
+params = [
+  { name = "logits", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "cap", kind = "scalar", type = "f32" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 262144, cap = 30.0 }]
+
+[[launcher]]
+name = "gather_rows"
+cpp = "GatherRows"
+returns = "void"
+doc = "`dst[i] = src[index[i]]` (rows of `dim`)."
+params = [
+  { name = "src", kind = "in", elem = "f32", len = "src_rows * dim" },
+  { name = "index", kind = "indices", len = "rows", below = "src_rows" },
+  { name = "dst", kind = "out", elem = "f32", len = "rows * dim" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "dim", kind = "scalar", type = "u32" },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "dim >= 1"]
+probes = [{ rows = 3, dim = 2816, src_rows = 9, index = 8 }]
+
+[[launcher]]
+name = "move_key"
+cpp = "flat::MoveKey"
+returns = "supported"
+doc = "Every listed layer's K and V caches: copies the binary16 row of key `from` over that of key `to` (slot key % ring; rows of k_width and v_width values)."
+params = [
+  { name = "k", kind = "inout", elem = "f16", list = "layers", len = "ring * k_width" },
+  { name = "v", kind = "inout", elem = "f16", list = "layers", len = "ring * v_width" },
+  { name = "k_width", kind = "scalar", type = "u32", list = "layers" },
+  { name = "v_width", kind = "scalar", type = "u32", list = "layers" },
+  { name = "ring", kind = "scalar", type = "u32", list = "layers" },
+  { name = "layers", kind = "scalar", type = "u32" },
+  { name = "from", kind = "scalar", type = "u32" },
+  { name = "to", kind = "scalar", type = "u32" },
+]
+requires = ["layers >= 1", "layers <= 96", "ring >= 1"]
+probes = [{ k_width = [256, 128], v_width = [256, 1024], ring = [10, 70], layers = 2, from = 66, to = 64 }]
+
+# --- Logit candidates (candidates.hpp) ---------------------------------------
+
+[[launcher]]
+name = "logit_candidates"
+cpp = "flat::LogitCandidates"
+returns = "supported"
+doc = "Per logit row: the `top` largest finite logits (value, then lower token) at out[r * top], `counts[r]` of them, or 0xFFFFFFFF when the row needs its full logits; `out` holds (u32 token, F32 value bits) pairs. Zeroes `work` first."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "rows * vocab" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "top", kind = "scalar", type = "u32" },
+  { name = "extra", kind = "const", cpp_type = "const std::uint32_t*", value = "nullptr" },
+  { name = "n_extra", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "work", kind = "out", elem = "bytes", len = "rows * 16384 + (rows * 8 + 255) / 256 * 256 + (rows * 4352 + 255) / 256 * 256 + rows * 16384" },
+  { name = "counts", kind = "out", elem = "u32", len = "rows" },
+  { name = "out", kind = "out", elem = "u32", len = "2 * rows * top" },
+]
+requires = ["rows >= 1", "vocab >= 4", "vocab % 4 == 0", "top >= 1", "top <= 1088"]
+probes = [{ rows = 3, vocab = 262144, top = 64 }, { rows = 1, vocab = 4, top = 1088 }]
+
+[[launcher]]
+name = "logit_candidates_extra"
+cpp = "flat::LogitCandidates"
+returns = "supported"
+doc = "`logit_candidates` that also gathers the logits of `n_extra` listed tokens after the top ones (rows of top + n_extra records)."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "rows * vocab" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+  { name = "top", kind = "scalar", type = "u32" },
+  { name = "extra", kind = "indices", len = "n_extra", below = "vocab" },
+  { name = "n_extra", kind = "scalar", type = "u32" },
+  { name = "work", kind = "out", elem = "bytes", len = "rows * 16384 + (rows * 8 + 255) / 256 * 256 + (rows * 4352 + 255) / 256 * 256 + rows * 16384" },
+  { name = "counts", kind = "out", elem = "u32", len = "rows" },
+  { name = "out", kind = "out", elem = "u32", len = "2 * rows * (top + n_extra)" },
+]
+requires = ["rows >= 1", "vocab >= 4", "vocab % 4 == 0", "top >= 1", "top <= 1088", "n_extra >= 1", "n_extra <= 1024"]
+probes = [{ rows = 2, vocab = 1024, top = 64, n_extra = 5, extra = 1023 }]
+
+# --- Projections (gemv.hpp, half_gemm.hpp, wmma_gemv.hpp, ggml/gemm.hpp) -----
+
+[[launcher]]
+name = "kquant_gemv"
+cpp = "flat::KQuantGemv"
+returns = "supported"
+doc = "`y = W x` for one F32 activation row: the decode projection of K-quant, Q4_0 and Q8_0 weights (k a multiple of 256)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_0", "Q4_K", "Q5_K", "Q6_K", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f32", len = "k" },
+  { name = "y", kind = "out", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { w = "Q4_K", m = 1030, k = 2816 },
+  { w = "Q6_K", m = 3, k = 1024 },
+  { w = "Q8_0", m = 5, k = 21504 },
+  { w = "Q4_0", m = 7, k = 256 },
+  { w = "Q5_K", m = 9, k = 512 },
+]
+
+[[launcher]]
+name = "half_gemv"
+cpp = "LaunchHalfGemv"
+returns = "supported"
+doc = "`y[r] = W x[r]` for binary16 W ([m][k]) and 1 to 16 F32 rows, each row rounding as it would alone."
+params = [
+  { name = "w", kind = "in", elem = "f16", len = "m * k" },
+  { name = "x", kind = "in", elem = "f32", len = "rows * k" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "rows <= 16", "m >= 1", "k >= 8", "k % 8 == 0"]
+probes = [{ rows = 3, m = 100, k = 2816 }, { rows = 16, m = 1, k = 8 }]
+
+[[launcher]]
+name = "convert_bf16_to_half"
+cpp = "ConvertBf16ToHalf"
+returns = "void"
+doc = "Rewrites `count` BF16 values as binary16 in place and adds those outside the binary16 range to `overflow`."
+params = [
+  { name = "data", kind = "inout", elem = "bytes", len = "count * 2" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "overflow", kind = "inout", elem = "u32", len = "1" },
+]
+probes = [{ count = 3000 }, { count = 0 }]
+
+[[launcher]]
+name = "repack_q8_0_as_q4k"
+cpp = "RepackQ8_0AsQ4K"
+returns = "void"
+doc = "Q8_0 rows ([rows][cols]) requantized as Q4_K with ggml's reference quantizer (144 bytes per 256 values)."
+params = [
+  { name = "src", kind = "quant", rows = "rows", cols = "cols", formats = ["Q8_0"] },
+  { name = "dst", kind = "out", elem = "bytes", len = "rows * (cols / 256) * 144" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "cols", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "cols >= 256", "cols % 256 == 0"]
+probes = [{ src = "Q8_0", rows = 5, cols = 2816 }]
+
+[[launcher]]
+name = "narrow_activations"
+cpp = "NarrowActivations"
+returns = "void"
+doc = "Binary16 copy (nearest) of `count` floats for the binary16 GEMMs."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "count" },
+  { name = "out", kind = "out", elem = "f16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 1000 }]
+
+[[launcher]]
+name = "unquantized_f16_gemm"
+cpp = "flat::UnquantizedF16Gemm"
+returns = "supported"
+doc = "`out[t] = W x[t]` over binary16 W ([m][k]) and rows, F32 accumulation; batches from `wide_from` rows take wider tiles (same results)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["F16"] },
+  { name = "x", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "out", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "wide_from", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "m >= 1", "k >= 32", "k % 32 == 0"]
+probes = [
+  { w = "F16", batch = 130, m = 1152, k = 1152, wide_from = 128 },
+  { w = "F16", batch = 9, m = 97, k = 64, wide_from = 1024 },
+]
+
+[[launcher]]
+name = "dense_f16_gemm"
+cpp = "flat::DenseF16Gemm"
+returns = "supported"
+doc = "`out[t] = W x[t]` over binary16 rows and Q8_0 weights (`grouped`: in the grouped layout of wmma_gemv.hpp, m > 512 and k a multiple of 256), F32 accumulation; `plan` picks a wide-batch tile plan (DenseF16Plan, same results)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0"] },
+  { name = "x", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "out", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "plan", kind = "scalar", type = "u32" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["batch >= 1", "m >= 1", "k >= 32", "k % 32 == 0"]
+probes = [
+  { w = "Q8_0", batch = 40, m = 200, k = 96, plan = 0, grouped = false },
+  { w = "Q8_0", batch = 130, m = 500, k = 64, plan = 0, grouped = false },
+  { w = "Q8_0", batch = 1030, m = 1792, k = 256, plan = 3, grouped = true },
+  { w = "Q8_0", batch = 50, m = 600, k = 512, plan = 0, grouped = true },
+]
+
+[[launcher]]
+name = "dense_f16_geglu_gemm"
+cpp = "flat::DenseF16GeGluGemm"
+returns = "supported"
+doc = "A fused Q8_0 [gate | up] (m rows) over binary16 rows with the GeGLU epilogue: `out[t]` holds m / 2 binary16 values of gelu_tanh(gate) * up (96 rows and more)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0"] },
+  { name = "x", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "out", kind = "out", elem = "f16", len = "batch * (m / 2)" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+  { name = "half_weights", kind = "const", cpp_type = "bool", value = "false" },
+]
+requires = ["batch >= 96", "m >= 64", "m % 64 == 0", "k >= 32", "k % 32 == 0"]
+probes = [
+  { w = "Q8_0", batch = 100, m = 256, k = 512, grouped = false },
+  { w = "Q8_0", batch = 130, m = 1024, k = 256, grouped = true },
+]
+
+[[launcher]]
+name = "dense_f16_geglu_gemm_half"
+cpp = "flat::DenseF16GeGluGemm"
+returns = "supported"
+doc = "`dense_f16_geglu_gemm` over binary16 weights."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["F16"] },
+  { name = "x", kind = "in", elem = "f16", len = "batch * k" },
+  { name = "out", kind = "out", elem = "f16", len = "batch * (m / 2)" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "grouped", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "half_weights", kind = "const", cpp_type = "bool", value = "true" },
+]
+requires = ["batch >= 96", "m >= 64", "m % 64 == 0", "k >= 32", "k % 32 == 0"]
+probes = [{ w = "F16", batch = 100, m = 192, k = 96 }]
+
+[[launcher]]
+name = "wmma_gemv"
+cpp = "flat::WmmaGemv"
+returns = "supported"
+doc = "`y[r] = W x[r]` for 1 to 16 F32 rows on the matrix cores, every row rounding as it would alone (Q4_K, Q5_K, Q6_K, Q4_0; Q8_0 from 2048 x 4096); `grouped`: W in the grouped layout (same bytes and results)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f32", len = "rows * k" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "scratch", kind = "inout", elem = "bytes", len = "68 * k + 3145728" },
+  { name = "packed", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 1", "rows <= 16", "m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { w = "Q4_K", rows = 3, m = 2816, k = 2816, grouped = false },
+  { w = "Q6_K", rows = 9, m = 300, k = 21504, grouped = false },
+  { w = "Q8_0", rows = 16, m = 2048, k = 4096, grouped = true },
+  { w = "Q4_0", rows = 1, m = 129, k = 256, grouped = true },
+  { w = "Q5_K", rows = 5, m = 17, k = 512, grouped = false },
+]
+
+[[launcher]]
+name = "wmma_gemv_packed"
+cpp = "flat::WmmaGemv"
+returns = "supported"
+doc = "`wmma_gemv` over the activation pack an earlier launch wrote into `scratch` (rows of width k)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "scratch", kind = "inout", elem = "bytes", len = "68 * k + 3145728" },
+  { name = "packed", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 1", "rows <= 16", "m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ w = "Q4_K", rows = 2, m = 704, k = 2816, grouped = true }]
+
+[[launcher]]
+name = "group_weights_144"
+cpp = "flat::GroupWeights"
+returns = "supported"
+doc = "Reorders GGUF rows of Q4_K or Q4_0 weights ([m][k]) into the grouped layout of wmma_gemv.hpp at `dst` (the same size)."
+params = [
+  { name = "src", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q4_0"] },
+  { name = "src_type", kind = "format", of = "src" },
+  { name = "dst", kind = "out", elem = "bytes", len = "m * (k / 256) * 144" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ src = "Q4_K", m = 300, k = 512 }, { src = "Q4_0", m = 7, k = 256 }]
+
+[[launcher]]
+name = "group_weights_176"
+cpp = "flat::GroupWeights"
+returns = "supported"
+doc = "`group_weights_144` for Q5_K weights."
+params = [
+  { name = "src", kind = "quant", rows = "m", cols = "k", formats = ["Q5_K"] },
+  { name = "src_type", kind = "format", of = "src" },
+  { name = "dst", kind = "out", elem = "bytes", len = "m * (k / 256) * 176" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ src = "Q5_K", m = 130, k = 512 }]
+
+[[launcher]]
+name = "group_weights_210"
+cpp = "flat::GroupWeights"
+returns = "supported"
+doc = "`group_weights_144` for Q6_K weights."
+params = [
+  { name = "src", kind = "quant", rows = "m", cols = "k", formats = ["Q6_K"] },
+  { name = "src_type", kind = "format", of = "src" },
+  { name = "dst", kind = "out", elem = "bytes", len = "m * (k / 256) * 210" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ src = "Q6_K", m = 257, k = 768 }]
+
+[[launcher]]
+name = "group_weights_272"
+cpp = "flat::GroupWeights"
+returns = "supported"
+doc = "`group_weights_144` for Q8_0 weights (2048 rows and 4096 columns at least)."
+params = [
+  { name = "src", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0"] },
+  { name = "src_type", kind = "format", of = "src" },
+  { name = "dst", kind = "out", elem = "bytes", len = "m * (k / 256) * 272" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ src = "Q8_0", m = 2050, k = 4096 }]
+
+[[launcher]]
+name = "gemv"
+cpp = "::gufo::models::gemma4::ggml::LaunchGEMV"
+returns = "void"
+doc = "Decode GEMV `y = A x` over F32, BF16, Q8_0, Q4_0 and K-quant rows."
+params = [
+  { name = "a", kind = "quant", rows = "m", cols = "k", formats = ["F32", "BF16", "Q8_0", "Q4_0", "Q4_K", "Q5_K", "Q6_K"] },
+  { name = "a_type", kind = "format", of = "a" },
+  { name = "x", kind = "in", elem = "f32", len = "k" },
+  { name = "y", kind = "out", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "k >= 1", "m <= 4294967295"]
+probes = [
+  { a = "Q6_K", m = 5376, k = 1024 },
+  { a = "Q8_0", m = 3, k = 64 },
+  { a = "BF16", m = 5, k = 100 },
+  { a = "BF16", m = 3, k = 17408 },
+  { a = "F32", m = 2, k = 7 },
+  { a = "Q4_0", m = 4, k = 32 },
+]
+
+[[launcher]]
+name = "batched_quant_gemm_f32"
+cpp = "::gufo::models::gemma4::ggml::LaunchBatchedQuantGEMMFp32"
+returns = "void"
+doc = "`y[t] = W x[t]` for F32 rows with the decode GEMV's per-output arithmetic, in exact passes of up to eight rows."
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q4_0", "Q4_K", "Q5_K", "Q6_K"] },
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "m >= 1", "k >= 1"]
+probes = [
+  { w = "Q8_0", batch = 3, m = 70, k = 256 },
+  { w = "Q8_0", batch = 13, m = 513, k = 2816 },
+  { w = "Q4_K", batch = 5, m = 1000, k = 2816 },
+  { w = "Q6_K", batch = 8, m = 262, k = 512 },
+  { w = "Q4_0", batch = 2, m = 33, k = 256 },
+]
+
+[[launcher]]
+name = "q8_0_small_batch_wide"
+cpp = "::gufo::models::gemma4::ggml::LaunchQ8_0SmallBatchWide"
+returns = "supported"
+doc = "Q8_0 at 9 to 16 F32 rows in one weight pass, every row equal to the decode GEMV's."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0"] },
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 9", "batch <= 16", "m >= 1", "k >= 32"]
+probes = [{ w = "Q8_0", batch = 11, m = 100, k = 2816 }, { w = "Q8_0", batch = 16, m = 1, k = 32 }]
+
+[[launcher]]
+name = "kquant_small_batch_double_stage"
+cpp = "::gufo::models::gemma4::ggml::LaunchKQuantSmallBatchDoubleStage"
+returns = "supported"
+doc = "K-quant and Q4_0 rows at 1 to 16 F32 rows in one weight pass for long K, every row equal to the decode GEMV's."
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0"] },
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "batch <= 16", "m >= 1", "k >= 256"]
+probes = [{ w = "Q4_K", batch = 3, m = 100, k = 21504 }, { w = "Q6_K", batch = 12, m = 50, k = 512 }]
+
+[[launcher]]
+name = "quantize_q8_1_from_f32"
+cpp = "::gufo::models::gemma4::ggml::LaunchQuantizeActivationQ8_1FromFp32"
+returns = "void"
+doc = "Tiled Q8_1 activation of [batch][k] F32 values (padding rows of the last 16-row tile zeroed)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "batch * k" },
+  { name = "q8_out", kind = "out", elem = "bytes", len = "((batch + 15) / 16) * (k / 32) * 640" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "k >= 32", "k % 32 == 0"]
+probes = [{ batch = 20, k = 2816 }, { batch = 17, k = 32 }]
+
+[[launcher]]
+name = "batched_quant_gemm_q8_1"
+cpp = "::gufo::models::gemma4::ggml::LaunchBatchedQuantGEMMPreQuantized"
+returns = "void"
+doc = "`y[t] = W x[t]` on the matrix cores from the tiled Q8_1 activation (the prefill projection of Q8_0, Q4_0 and K-quant weights)."
+params = [
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q8_0", "Q4_0", "Q4_K", "Q5_K", "Q6_K"] },
+  { name = "q8_x", kind = "in", elem = "bytes", len = "((batch + 127) / 128) * 8 * (k / 32) * 640" },
+  { name = "y", kind = "out", elem = "f32", len = "batch * m" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "m >= 1", "k >= 32", "k % 32 == 0", "m < 2147483648", "k < 2147483648"]
+probes = [
+  { w = "Q8_0", batch = 5, m = 768, k = 256 },
+  { w = "Q8_0", batch = 100, m = 1024, k = 1024 },
+  { w = "Q8_0", batch = 20, m = 48, k = 2816 },
+  { w = "Q4_K", batch = 130, m = 1030, k = 1024 },
+  { w = "Q5_K", batch = 20, m = 1030, k = 512 },
+  { w = "Q6_K", batch = 97, m = 2048, k = 2048 },
+  { w = "Q4_0", batch = 40, m = 300, k = 512 },
+  { w = "Q8_0", batch = 40, m = 2816, k = 2112 },
+]
+
+[[launcher]]
+name = "embedding_lookup"
+cpp = "::gufo::models::gemma4::ggml::LaunchBatchedEmbeddingLookup"
+returns = "void"
+doc = "Rows `token_ids[b]` of the embedding table, decoded to F32 [batch][hidden]."
+params = [
+  { name = "table", kind = "quant", rows = "rows", cols = "hidden_size", formats = ["F32", "BF16", "Q8_0", "Q4_0", "Q4_K", "Q5_K", "Q6_K"] },
+  { name = "table_type", kind = "format", of = "table" },
+  { name = "token_ids", kind = "indices", len = "batch_size", below = "rows" },
+  { name = "out_hidden", kind = "out", elem = "f32", len = "batch_size * hidden_size" },
+  { name = "batch_size", kind = "scalar", type = "usize" },
+  { name = "hidden_size", kind = "scalar", type = "usize" },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["batch_size >= 1", "hidden_size >= 1"]
+probes = [
+  { table = "Q6_K", batch_size = 20, hidden_size = 2816, rows = 7, token_ids = 6 },
+  { table = "BF16", batch_size = 1, hidden_size = 5, rows = 1 },
+  { table = "Q8_0", batch_size = 3, hidden_size = 64, rows = 2, token_ids = 1 },
+]
+
+[[launcher]]
+name = "batched_argmax"
+cpp = "flat::BatchedArgmax"
+returns = "supported"
+doc = "Greedy token of each logits row (first maximum); tiles the vocabulary when `scratch` holds two floats per 4096-token tile and row."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "batch * vocab" },
+  { name = "out_tokens", kind = "out", elem = "u32", len = "batch" },
+  { name = "batch", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize" },
+  { name = "scratch", kind = "inout", elem = "f32", len = "scratch_len" },
+  { name = "scratch_len", kind = "scalar", type = "usize" },
+]
+requires = ["batch >= 1", "vocab >= 1"]
+probes = [
+  { batch = 3, vocab = 262144, scratch_len = 1024 },
+  { batch = 2, vocab = 100, scratch_len = 0 },
+]
+
+[[launcher]]
+name = "mtp_top_candidates"
+cpp = "MtpTopCandidates"
+returns = "void"
+doc = "The drafter row's top 64 tokens (descending score, lower ID on ties; non-finite scores as -infinity) in ids[0..64) and their scores; `ids` and `scratch_ids` are the selection's workspace. Padding entries hold 0xFFFFFFFF."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "vocab" },
+  { name = "ids", kind = "indices_out", padded = true, len = "((vocab + 1023) / 1024 + 2) * 64", below = "vocab" },
+  { name = "scratch_ids", kind = "out", elem = "u32", len = "((vocab + 1023) / 1024 + 2) * 64" },
+  { name = "scores", kind = "out", elem = "f32", len = "64" },
+  { name = "vocab", kind = "scalar", type = "u32" },
+]
+requires = ["vocab >= 64"]
+probes = [{ vocab = 262144 }, { vocab = 64 }, { vocab = 5000 }]
+
+# --- Experts (moe.hpp, half_gemm.hpp) ----------------------------------------
+#
+# Routing writes each row's `used` expert IDs; the group table of the routed
+# GEMV and the per-expert counts of the prefill buckets derive from exactly
+# those IDs (`expert_groups`, `expert_counts`), so their consumers can
+# require them. Trusted: for rows with finite logits the IDs are below
+# `experts` (TopKKernel picks no expert for a row of NaN logits and then
+# reads expert_scale at 0x7FFFFFFF).
+
+[[launcher]]
+name = "scale_router"
+cpp = "ScaleRouter"
+returns = "void"
+doc = "`router[e][i] *= scale[i]`: folds ffn_gate_inp.scale into the F32 router at load."
+params = [
+  { name = "router", kind = "inout", elem = "f32", len = "experts * hidden" },
+  { name = "scale", kind = "in", elem = "f32", len = "hidden" },
+  { name = "experts", kind = "scalar", type = "u32" },
+  { name = "hidden", kind = "scalar", type = "u32" },
+]
+requires = ["experts >= 1", "hidden >= 1"]
+probes = [{ experts = 128, hidden = 2816 }]
+
+[[launcher]]
+name = "moe_route"
+cpp = "flat::MoeRoute"
+returns = "supported"
+doc = "Routing of `rows` rows: `logits[r][e] = router[e] . x[r] * rms(x[r]) / sqrt(hidden)` (scale-folded router), the `used` largest in descending order (lower expert on ties) as ids[r], weights = softmax over them times expert_scale[id]."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * hidden" },
+  { name = "router", kind = "in", elem = "f32", len = "experts * hidden" },
+  { name = "expert_scale", kind = "in", elem = "f32", len = "experts" },
+  { name = "logits", kind = "out", elem = "f32", len = "rows * experts" },
+  { name = "raw_logits", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "ids", kind = "indices_out", signed = true, len = "rows * used", below = "experts" },
+  { name = "weights", kind = "out", elem = "f32", len = "rows * used" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "hidden", kind = "scalar", type = "u32" },
+  { name = "experts", kind = "scalar", type = "u32" },
+  { name = "used", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1", "hidden >= 128", "hidden <= 3072", "hidden % 128 == 0", "experts >= 1", "experts <= 256", "used >= 1", "used <= 8", "used <= experts"]
+probes = [
+  { rows = 1, hidden = 2816, experts = 128, used = 8, eps = 1e-6 },
+  { rows = 40, hidden = 2816, experts = 128, used = 8, eps = 1e-6 },
+  { rows = 3, hidden = 128, experts = 9, used = 2, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "moe_route_raw"
+cpp = "flat::MoeRoute"
+returns = "supported"
+doc = "`moe_route` whose router dot products a prefill GEMM already wrote to `logits`: scales them by the rows' rms(x) / sqrt(hidden) in place and selects."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * hidden" },
+  { name = "router", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "expert_scale", kind = "in", elem = "f32", len = "experts" },
+  { name = "logits", kind = "inout", elem = "f32", len = "rows * experts" },
+  { name = "raw_logits", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "ids", kind = "indices_out", signed = true, len = "rows * used", below = "experts" },
+  { name = "weights", kind = "out", elem = "f32", len = "rows * used" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "hidden", kind = "scalar", type = "u32" },
+  { name = "experts", kind = "scalar", type = "u32" },
+  { name = "used", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1", "hidden >= 1", "experts >= 1", "experts <= 256", "used >= 1", "used <= 8", "used <= experts"]
+probes = [{ rows = 40, hidden = 2816, experts = 128, used = 8, eps = 1e-6 }]
+
+[[launcher]]
+name = "expert_counts"
+cpp = "flat::ExpertCounts"
+returns = "supported"
+doc = "`counts[e]` = slots whose ID is e, derived from exactly these IDs (the counts the C++ routing accumulates beside them)."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "counts", kind = "indices_out", len = "experts", below = "slots + 1", derived_from = "ids", tag = "experts" },
+  { name = "slots", kind = "scalar", type = "u32" },
+  { name = "experts", kind = "scalar", type = "u32" },
+]
+requires = ["slots >= 1", "experts >= 1", "experts <= 256"]
+probes = [{ slots = 16384, experts = 128, ids = 127 }, { slots = 1, experts = 1 }]
+
+[[launcher]]
+name = "expert_groups"
+cpp = "flat::ExpertGroups"
+returns = "supported"
+doc = "The group table of the routed GEMV, derived from exactly these IDs: groups[0] = groups, then per group (in expert order) 18 ints: expert, slot count, its slots (in order). Trusted: the table names experts below `experts`, slots below `slots` and at most 16 slots per group."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "groups", kind = "indices_out", signed = true, len = "1 + experts * 18", below = "experts + slots + 17", derived_from = "ids", tag = "slots * 1024 + experts" },
+  { name = "slots", kind = "scalar", type = "u32" },
+  { name = "experts", kind = "scalar", type = "u32" },
+]
+requires = ["slots >= 1", "slots <= 128", "experts >= 1", "experts <= 256"]
+probes = [{ slots = 128, experts = 128, ids = 5 }, { slots = 1, experts = 1 }]
+
+[[launcher]]
+name = "routed_gemv"
+cpp = "flat::RoutedGemv"
+returns = "supported"
+doc = "Grouped routed projection: for every slot s of the groups of `groups` (`expert_groups` of these IDs), `y[s] = W[expert] x[s / row_div]` with W [experts][m][k]; `single` takes the one-slot build (every group one slot)."
+params = [
+  { name = "w", kind = "quant", rows = "experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q8_0", "Q5_1", "F16", "Q4_0", "Q5_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "groups", kind = "indices", signed = true, len = "1 + experts * 18", below = "experts + slots + 17", derived_from = "ids", tag = "slots * 1024 + experts" },
+  { name = "max_groups", kind = "scalar", type = "u32" },
+  { name = "x", kind = "in", elem = "f32", len = "((slots + row_div - 1) / row_div) * k" },
+  { name = "row_div", kind = "scalar", type = "u32" },
+  { name = "y", kind = "out", elem = "f32", len = "slots * m" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "single", kind = "scalar", type = "bool" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+  { name = "experts", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["slots >= 1", "slots <= 128", "experts >= 1", "experts <= 256", "max_groups >= 1", "row_div >= 1", "m >= 1", "k >= 64"]
+probes = [
+  { w = "Q8_0", max_groups = 8, row_div = 8, m = 2816, k = 704, single = true, slots = 8, experts = 128, ids = 7, groups = 1 },
+  { w = "Q4_K", max_groups = 16, row_div = 1, m = 704, k = 2816, single = false, slots = 128, experts = 128, ids = 3, groups = 1 },
+  { w = "Q6_K", max_groups = 3, row_div = 2, m = 17, k = 512, single = false, slots = 4, experts = 3, groups = 1 },
+]
+
+[[launcher]]
+name = "routed_gemv_geglu"
+cpp = "flat::RoutedGemv"
+returns = "supported"
+doc = "`routed_gemv` over fused [gate | up] experts (m rows): `y[s]` holds the m / 2 values gelu_tanh(gate) * up."
+params = [
+  { name = "w", kind = "quant", rows = "experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q8_0", "Q5_1", "F16", "Q4_0", "Q5_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "groups", kind = "indices", signed = true, len = "1 + experts * 18", below = "experts + slots + 17", derived_from = "ids", tag = "slots * 1024 + experts" },
+  { name = "max_groups", kind = "scalar", type = "u32" },
+  { name = "x", kind = "in", elem = "f32", len = "((slots + row_div - 1) / row_div) * k" },
+  { name = "row_div", kind = "scalar", type = "u32" },
+  { name = "y", kind = "out", elem = "f32", len = "slots * (m / 2)" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "single", kind = "scalar", type = "bool" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+  { name = "experts", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["slots >= 1", "slots <= 128", "experts >= 1", "experts <= 256", "max_groups >= 1", "row_div >= 1", "m >= 2", "m % 2 == 0", "k >= 64"]
+probes = [
+  { w = "Q8_0", max_groups = 8, row_div = 8, m = 1408, k = 2816, single = true, slots = 8, experts = 128, ids = 100, groups = 1 },
+  { w = "Q4_K", max_groups = 16, row_div = 8, m = 1408, k = 2816, single = false, slots = 128, experts = 128, groups = 1 },
+]
+
+[[launcher]]
+name = "dense_gemv"
+cpp = "flat::DenseGemv"
+returns = "supported"
+doc = "`y[r] = W x[r]` for 1 to 16 F32 rows with `routed_gemv`'s arithmetic over one Q4_0 or Q5_0 matrix (k a multiple of 64), every row rounding as it would alone."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_0", "Q5_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f32", len = "rows * k" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "rows <= 16", "m >= 1", "k >= 64", "k % 64 == 0"]
+probes = [{ w = "Q4_0", rows = 5, m = 2816, k = 2112 }, { w = "Q5_0", rows = 16, m = 3, k = 64 }]
+
+[[launcher]]
+name = "routed_compact"
+cpp = "RoutedCompact"
+returns = "void"
+doc = "Sorts the (row, slot) assignments by expert into 16-row padded buckets: pad_bounds (experts + 1 entries) and the compact rows' row and slot (-1 for padding)."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "n_tokens * k", below = "n_experts" },
+  # The scatter trusts that counts[e] is exactly the number of IDs equal to e,
+  # which the derivation guarantees; the bound only names the buffer's
+  # capacity (`slot_bound` assignments).
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1", derived_from = "ids", tag = "n_experts" },
+  { name = "pad_bounds", kind = "indices_out", signed = true, len = "n_experts + 1", below = "n_tokens * k + n_experts * 15 + 1" },
+  { name = "cursors", kind = "out", elem = "i32", len = "n_experts" },
+  { name = "rows_token", kind = "indices_out", signed = true, padded = true, len = "n_tokens * k + n_experts * 15", below = "n_tokens" },
+  { name = "rows_slot", kind = "indices_out", signed = true, padded = true, len = "n_tokens * k + n_experts * 15", below = "n_tokens * k" },
+  { name = "n_tokens", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "n_experts", kind = "scalar", type = "u32" },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["n_tokens >= 1", "k >= 1", "n_experts >= 1", "n_experts <= 1024", "n_tokens * k <= slot_bound"]
+# Uniform zero counts keep every scatter inside the first rows.
+probes = [{ n_tokens = 130, k = 8, n_experts = 128, slot_bound = 2000, counts = 0 }]
+
+[[launcher]]
+name = "build_routed_tiles"
+cpp = "flat::BuildRoutedTiles"
+returns = "supported"
+doc = "From the per-expert counts of these IDs, the routed tile maps of two tile heights, derived from exactly these counts: expert | tile << 16 in expert order (tile below 0x8000, so the maps are non-negative int32 values for the routed GEMMs), entries past the last tile dead (expert 0, tile 0x7FFF)."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "counts", kind = "indices", len = "experts", below = "slots + 1", derived_from = "ids", tag = "experts" },
+  { name = "experts", kind = "scalar", type = "u32" },
+  { name = "rows_a", kind = "scalar", type = "u32" },
+  { name = "capacity_a", kind = "scalar", type = "u32" },
+  { name = "tiles_a", kind = "indices_out", mask = 0xFFFF, len = "capacity_a", below = "experts", derived_from = "counts", tag = "rows_a * 1048576 + capacity_a" },
+  { name = "rows_b", kind = "scalar", type = "u32" },
+  { name = "capacity_b", kind = "scalar", type = "u32" },
+  { name = "tiles_b", kind = "indices_out", mask = 0xFFFF, len = "capacity_b", below = "experts", derived_from = "counts", tag = "rows_b * 1048576 + capacity_b" },
+  { name = "slots", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["slots >= 1", "slots <= 524272", "capacity_a <= 1048575", "capacity_b <= 1048575", "experts >= 1", "experts <= 256", "rows_a >= 16", "rows_b >= 16", "rows_a % 16 == 0", "rows_b % 16 == 0", "capacity_a >= (slots + 15 * experts) / rows_a + experts", "capacity_b >= (slots + 15 * experts) / rows_b + experts"]
+probes = [{ experts = 128, rows_a = 112, capacity_a = 300, rows_b = 64, capacity_b = 420, slots = 16384, counts = 0 }]
+
+[[launcher]]
+name = "routed_f16_gemm"
+cpp = "flat::RoutedF16Gemm"
+returns = "supported"
+doc = "Routed expert GEMM on the F16 WMMA cores: tile y computes expert tiles[y] & 0xFFFF over its compact rows [pad_bounds[e] + (tiles[y] >> 16) * tile_rows, + tile_rows) and writes F32 rows `out[rows_out[c]] = W[e] x[rows_in[c]]`."
+params = [
+  { name = "w", kind = "quant", rows = "n_experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q5_1", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "tile_rows * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "tile_rows", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "out", elem = "f32", len = "out_rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+probes = [
+  { w = "Q4_K", n_experts = 4, m = 200, k = 512, n_tiles = 3, tile_rows = 16, rows = 100, src_rows = 20, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+  { w = "Q8_0", n_experts = 3, m = 256, k = 640, n_tiles = 2, tile_rows = 64, rows = 90, src_rows = 60, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_f16_gemm_half"
+cpp = "flat::RoutedF16Gemm"
+returns = "supported"
+doc = "`routed_f16_gemm` writing binary16 rows."
+params = [
+  { name = "w", kind = "quant", rows = "n_experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q5_1", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "tile_rows * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "tile_rows", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "usize", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+probes = [
+  { w = "Q4_K", n_experts = 4, m = 200, k = 512, n_tiles = 3, tile_rows = 48, rows = 100, src_rows = 20, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+  { w = "Q5_1", n_experts = 3, m = 256, k = 640, n_tiles = 2, tile_rows = 64, rows = 90, src_rows = 60, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "Routed prefill projection over binary16 rows in the RoutedCompact layout with a 112-row tile map: `out[rows_out[i]] = W[e] x[rows_in[i]]` as F32 rows (K-quants, and Q4_0, Q5_0, Q5_1, Q8_0, F16)."
+params = [
+  { name = "w", kind = "quant", rows = "n_experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q5_0", "Q5_1", "Q8_0", "F16"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "out", elem = "f32", len = "out_rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 1", "k >= 64", "k % 64 == 0"]
+probes = [
+  { w = "Q8_0", n_experts = 4, m = 2816, k = 704, n_tiles = 3, rows = 200, src_rows = 60, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+  { w = "Q4_K", n_experts = 3, m = 300, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+  { w = "Q6_K", n_experts = 2, m = 128, k = 256, n_tiles = 1, rows = 112, src_rows = 9, out_rows = 9, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm_half"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "`routed_half_gemm` of K-quant experts writing binary16 rows (saturated)."
+params = [
+  { name = "w", kind = "quant", rows = "n_experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * m" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { w = "Q5_K", n_experts = 3, m = 300, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm_geglu"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "`routed_half_gemm` over fused [gate | up] experts (m rows; K-quants, Q4_0, Q8_0, F16) writing binary16 rows of the m / 2 values gelu_tanh(gate) * up."
+params = [
+  { name = "w", kind = "quant", rows = "n_experts * m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q8_0", "F16"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * (m / 2)" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 2", "m % 2 == 0", "k >= 64", "k % 64 == 0"]
+probes = [
+  { w = "Q8_0", n_experts = 4, m = 1408, k = 2816, n_tiles = 3, rows = 200, src_rows = 60, out_rows = 60, slot_bound = 2000, counts = 0, tiles = 0 },
+  { w = "Q4_K", n_experts = 3, m = 512, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm_compact_q4k"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "`routed_half_gemm_geglu` over the compact prefill copy of all Q4_K experts' fused [gate | up] rows (`pack_prefill_weights_compact` of n_experts * m rows; m a multiple of 16), with the same results."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "n_experts * m * (k / 128) * 80" },
+  { name = "w_type", kind = "const", cpp_type = "gufo::core::GgmlType", value = "gufo::core::GgmlType::kQ4_K" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * (m / 2)" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 16", "m % 16 == 0", "k >= 256", "k % 256 == 0"]
+probes = [
+  { n_experts = 3, m = 512, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm_compact_q5k"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "`routed_half_gemm_geglu` over the compact prefill copy of all Q5_K experts' fused [gate | up] rows (`pack_prefill_weights_compact_112` of n_experts * m rows; m a multiple of 16), with the same results."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "n_experts * m * (k / 128) * 112" },
+  { name = "w_type", kind = "const", cpp_type = "gufo::core::GgmlType", value = "gufo::core::GgmlType::kQ5_K" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * (m / 2)" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 16", "m % 16 == 0", "k >= 256", "k % 256 == 0"]
+probes = [
+  { n_experts = 3, m = 512, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "routed_half_gemm_compact_q6k"
+cpp = "flat::RoutedHalfGemm"
+returns = "supported"
+doc = "`routed_half_gemm_geglu` over the compact prefill copy of all Q6_K experts' fused [gate | up] rows (`pack_prefill_weights_compact_112` of n_experts * m rows; m a multiple of 16), with the same results."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "n_experts * m * (k / 128) * 112" },
+  { name = "w_type", kind = "const", cpp_type = "gufo::core::GgmlType", value = "gufo::core::GgmlType::kQ6_K" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "x", kind = "in", elem = "f16", len = "src_rows * k" },
+  { name = "counts", kind = "indices", len = "n_experts", below = "slot_bound + 1" },
+  { name = "tiles", kind = "indices", mask = 0xFFFF, len = "n_tiles", below = "n_experts", derived_from = "counts", tag = "112 * 1048576 + n_tiles" },
+  { name = "n_tiles", kind = "scalar", type = "u32" },
+  { name = "pad_bounds", kind = "indices", signed = true, len = "n_experts + 1", below = "rows + 1" },
+  { name = "rows_in", kind = "indices", signed = true, padded = true, len = "rows", below = "src_rows" },
+  { name = "rows_out", kind = "indices", signed = true, padded = true, len = "rows", below = "out_rows" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "out_rows * (m / 2)" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "n_experts", kind = "scalar", type = "u32", contract_only = true },
+  { name = "rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "src_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "out_rows", kind = "scalar", type = "u32", contract_only = true },
+  { name = "slot_bound", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["m >= 16", "m % 16 == 0", "k >= 256", "k % 256 == 0"]
+probes = [
+  { n_experts = 3, m = 512, k = 512, n_tiles = 2, rows = 150, src_rows = 40, out_rows = 50, slot_bound = 2000, counts = 0, tiles = 0 },
+]
+
+[[launcher]]
+name = "dense_half_gemm"
+cpp = "flat::DenseHalfGemm"
+returns = "supported"
+doc = "Dense prefill projection over binary16 rows ([rows][k]) for K-quant (k a multiple of 256), Q4_0, Q5_0 and Q8_0 weights (k a multiple of 64): F32 rows `out[r] = W x[r]`; `grouped`: W in the grouped layout (k a multiple of 256; not Q5_0)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q5_0", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 1", "m >= 1", "k >= 64", "k % 64 == 0"]
+probes = [
+  { w = "Q4_K", rows = 130, m = 300, k = 512, grouped = false },
+  { w = "Q6_K", rows = 20, m = 4100, k = 256, grouped = false },
+  { w = "Q4_0", rows = 40, m = 200, k = 2112, grouped = false },
+  { w = "Q8_0", rows = 113, m = 1030, k = 512, grouped = true },
+]
+
+[[launcher]]
+name = "dense_half_gemm_half"
+cpp = "flat::DenseHalfGemm"
+returns = "supported"
+doc = "`dense_half_gemm` of K-quant weights writing binary16 rows (saturated)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * m" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 1", "m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ w = "Q5_K", rows = 50, m = 300, k = 512, grouped = false }]
+
+[[launcher]]
+name = "dense_half_gemm_geglu"
+cpp = "flat::DenseHalfGemm"
+returns = "supported"
+doc = "`dense_half_gemm` over a fused [gate | up] (m rows) writing binary16 rows of the m / 2 values gelu_tanh(gate) * up."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q5_0", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * (m / 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "grouped", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 1", "m >= 2", "m % 2 == 0", "k >= 64", "k % 64 == 0"]
+probes = [
+  { w = "Q4_K", rows = 130, m = 512, k = 512, grouped = false },
+  { w = "Q8_0", rows = 40, m = 256, k = 2816, grouped = false },
+]
+
+[[launcher]]
+name = "pack_prefill_weights_decoded"
+cpp = "flat::PackPrefillWeights"
+returns = "supported"
+doc = "The decoded prefill copy of dense weights ([m][k]): binary16 values in rows padded to 16."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K", "Q5_K", "Q6_K", "Q4_0", "Q5_0", "Q8_0"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "2" },
+  { name = "packed", kind = "out", elem = "f16", len = "((m + 15) / 16 * 16) * k" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 128", "k % 128 == 0"]
+probes = [{ w = "Q4_K", m = 300, k = 512 }, { w = "Q8_0", m = 17, k = 128 }]
+
+[[launcher]]
+name = "pack_prefill_weights_compact"
+cpp = "flat::PackPrefillWeights"
+returns = "supported"
+doc = "The compact prefill copy of Q4_K dense weights (80 bytes per 128 values, rows padded to 16)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q4_K"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "packed", kind = "out", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 80" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ w = "Q4_K", m = 300, k = 512 }]
+
+[[launcher]]
+name = "pack_prefill_weights_compact_112"
+cpp = "flat::PackPrefillWeights"
+returns = "supported"
+doc = "The compact prefill copy of Q5_K or Q6_K dense weights (112 bytes per 128 values, rows padded to 16)."
+params = [
+  { name = "w", kind = "quant", rows = "m", cols = "k", formats = ["Q5_K", "Q6_K"] },
+  { name = "w_type", kind = "format", of = "w" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "packed", kind = "out", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 112" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+]
+requires = ["m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ w = "Q6_K", m = 300, k = 512 }, { w = "Q5_K", m = 1, k = 256 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_decoded"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "Dense prefill projection over a decoded prefill copy (`pack_prefill_weights_decoded` of the format `format`, an ExpertFormat value): F32 rows `out[r] = W x[r]`; `group`: token tiles per sweep (0: the default)."
+params = [
+  { name = "format", kind = "scalar", type = "u32" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "2" },
+  { name = "w", kind = "in", elem = "f16", len = "((m + 15) / 16 * 16) * k" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 1", "k >= 128", "k % 128 == 0", "format <= 7"]
+probes = [{ format = 0, rows = 130, m = 300, k = 512, group = 0 }, { format = 3, rows = 20, m = 17, k = 128, group = 2 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_decoded_geglu"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "`packed_prefill_gemm_decoded` over a fused [gate | up] (m rows) writing binary16 rows of gelu_tanh(gate) * up."
+params = [
+  { name = "format", kind = "scalar", type = "u32" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "2" },
+  { name = "w", kind = "in", elem = "f16", len = "((m + 15) / 16 * 16) * k" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * (m / 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 2", "m % 2 == 0", "k >= 128", "k % 128 == 0", "format <= 7"]
+probes = [{ format = 0, rows = 130, m = 512, k = 512, group = 0 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_compact"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "Dense prefill projection over a compact Q4_K prefill copy (`pack_prefill_weights_compact`): F32 rows."
+params = [
+  { name = "format", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "w", kind = "in", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 80" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 1", "k >= 256", "k % 256 == 0"]
+probes = [{ rows = 130, m = 300, k = 512, group = 0 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_compact_geglu"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "`packed_prefill_gemm_compact` over a fused [gate | up] writing binary16 rows of gelu_tanh(gate) * up."
+params = [
+  { name = "format", kind = "const", cpp_type = "std::uint32_t", value = "0" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "w", kind = "in", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 80" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * (m / 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 2", "m % 2 == 0", "k >= 256", "k % 256 == 0"]
+probes = [{ rows = 130, m = 512, k = 512, group = 0 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_compact_112"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "`packed_prefill_gemm_compact` over a compact Q5_K (`format` 1) or Q6_K (2) copy (`pack_prefill_weights_compact_112`)."
+params = [
+  { name = "format", kind = "scalar", type = "u32" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "w", kind = "in", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 112" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * m" },
+  { name = "out_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 1", "k >= 256", "k % 256 == 0", "format >= 1", "format <= 2"]
+probes = [{ format = 2, rows = 130, m = 300, k = 512, group = 0 }]
+
+[[launcher]]
+name = "packed_prefill_gemm_compact_112_geglu"
+cpp = "flat::PackedPrefillGemm"
+returns = "supported"
+doc = "`packed_prefill_gemm_compact_112` over a fused [gate | up] writing binary16 rows of gelu_tanh(gate) * up."
+params = [
+  { name = "format", kind = "scalar", type = "u32" },
+  { name = "layout", kind = "const", cpp_type = "std::uint32_t", value = "1" },
+  { name = "w", kind = "in", elem = "bytes", len = "((m + 15) / 16 * 16) * (k / 128) * 112" },
+  { name = "x", kind = "in", elem = "f16", len = "rows * k" },
+  { name = "out", kind = "const", cpp_type = "float*", value = "nullptr" },
+  { name = "out_half", kind = "out", elem = "f16", len = "rows * (m / 2)" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "m", kind = "scalar", type = "u32" },
+  { name = "k", kind = "scalar", type = "u32" },
+  { name = "geglu", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "group", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "m >= 2", "m % 2 == 0", "k >= 256", "k % 256 == 0", "format >= 1", "format <= 2"]
+probes = [{ format = 1, rows = 130, m = 512, k = 512, group = 0 }]
+
+[[launcher]]
+name = "moe_finish"
+cpp = "flat::MoeFinish"
+returns = "supported"
+doc = "The feed-forward residual of an expert layer per row r: f = rms(dense[r]) * norm1 + rms(sum_j weights[r][j] * experts[r * used + j]) * norm2; x[r] = (x[r] + rms(f) * post_norm) * scale; h[r] = rms(x[r]) * next_norm (no `next_norm`: no h) as F32 and/or binary16 rows."
+params = [
+  { name = "dense", kind = "in", elem = "f32", len = "rows * hidden" },
+  { name = "experts", kind = "in", elem = "f32", len = "rows * used * hidden" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows * used" },
+  { name = "norm1", kind = "in", elem = "f32", len = "hidden" },
+  { name = "norm2", kind = "in", elem = "f32", len = "hidden" },
+  { name = "post_norm", kind = "in", elem = "f32", len = "hidden" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "x", kind = "inout", elem = "f32", len = "rows * hidden" },
+  { name = "next_norm", kind = "in", elem = "f32", len = "hidden", optional = true },
+  { name = "h", kind = "out", elem = "f32", len = "rows * hidden", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "hidden", kind = "scalar", type = "u32" },
+  { name = "used", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "h_half", kind = "out", elem = "f16", len = "rows * hidden", optional = true },
+  { name = "pack_scratch", kind = "const", cpp_type = "void*", value = "nullptr" },
+]
+requires = ["rows >= 1", "hidden >= 1", "hidden <= 6144", "used >= 1"]
+probes = [
+  { scale = 0.5, rows = 40, hidden = 2816, used = 8, eps = 1e-6, with = ["next_norm", "h", "h_half"] },
+  { scale = 1.0, rows = 1, hidden = 5, used = 1, eps = 1e-6 },
+]
+
+[[launcher]]
+name = "moe_finish_pack"
+cpp = "flat::MoeFinish"
+returns = "supported"
+doc = "`moe_finish` of decode rows (16 at most) whose h rows also fill the activation pack of the next projection (width `hidden`)."
+params = [
+  { name = "dense", kind = "in", elem = "f32", len = "rows * hidden" },
+  { name = "experts", kind = "in", elem = "f32", len = "rows * used * hidden" },
+  { name = "weights", kind = "in", elem = "f32", len = "rows * used" },
+  { name = "norm1", kind = "in", elem = "f32", len = "hidden" },
+  { name = "norm2", kind = "in", elem = "f32", len = "hidden" },
+  { name = "post_norm", kind = "in", elem = "f32", len = "hidden" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "x", kind = "inout", elem = "f32", len = "rows * hidden" },
+  { name = "next_norm", kind = "in", elem = "f32", len = "hidden" },
+  { name = "h", kind = "out", elem = "f32", len = "rows * hidden", optional = true },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "hidden", kind = "scalar", type = "u32" },
+  { name = "used", kind = "scalar", type = "u32" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "h_half", kind = "const", cpp_type = "void*", value = "nullptr" },
+  { name = "pack_scratch", kind = "out", elem = "bytes", len = "68 * hidden" },
+]
+requires = ["rows >= 1", "rows <= 16", "hidden >= 32", "hidden <= 6144", "hidden % 32 == 0", "used >= 1"]
+probes = [{ scale = 0.5, rows = 3, hidden = 2816, used = 8, eps = 1e-6, with = ["h"] }]
+
+# --- Vision tower (adapters_vision.hip: vision/encoder.hip's kernels) --------
+#
+# Hidden rows of 1152, 16 heads of 72 (padded to 80 for the WMMA attention),
+# FFN 4304 (padded to 4320), patches of 16 x 16 x 3 values, 3 x 3 pooling.
+
+[[launcher]]
+name = "vision_bf16_to_half"
+cpp = "flat::VisionBf16ToHalf"
+returns = "supported"
+doc = "In place, BF16 weights to binary16 (saturated; below 2^-24 to zero)."
+params = [
+  { name = "data", kind = "inout", elem = "bytes", len = "count * 2" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 5000 }]
+
+[[launcher]]
+name = "vision_patchify"
+cpp = "flat::VisionPatchify"
+returns = "supported"
+doc = "Patches of an RGB image ([height][width][3] bytes) as `2 v / 255 - 1`, each ordered channel, row, column ([count][768])."
+params = [
+  { name = "pixels", kind = "in", elem = "u8", len = "width * height * 3" },
+  { name = "patches", kind = "out", elem = "f32", len = "count * 768" },
+  { name = "width", kind = "scalar", type = "u32" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "height", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["count >= 1", "columns >= 1", "columns * 16 <= width", "count <= columns * (height / 16)"]
+probes = [{ width = 96, columns = 6, count = 18, height = 48 }]
+
+[[launcher]]
+name = "vision_add_positions"
+cpp = "flat::VisionAddPositions"
+returns = "supported"
+doc = "Adds the learned x and y position rows ([2][10240][1152]) to the patch rows."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "count * 1152" },
+  { name = "table", kind = "in", elem = "f32", len = "2 * 10240 * 1152" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["count >= 1", "columns >= 1", "columns <= 10240", "count <= columns * 10240"]
+probes = [{ columns = 6, count = 18 }]
+
+[[launcher]]
+name = "vision_rms_norm_half"
+cpp = "flat::VisionRmsNormHalf"
+returns = "supported"
+doc = "`y[r] = rms(x[r]) * weight` (no weight: `rms(x[r])`) as binary16 rows, saturated."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "f32", len = "width", optional = true },
+  { name = "y", kind = "out", elem = "f16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "width", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "width >= 1"]
+probes = [{ rows = 18, width = 1152, with = ["weight"] }]
+
+[[launcher]]
+name = "vision_qkv_post"
+cpp = "flat::VisionQkvPost"
+returns = "supported"
+doc = "Per token and head: Q and K RMS-normalized with their weights and rotated by the patch column (first half head) and row (second half), V normalized; Q and K as binary16 [head][padded][80], V transposed as [head][80][padded]. `cos` and `sin` hold [position][18]."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "count * 3456" },
+  { name = "q_norm", kind = "in", elem = "f32", len = "72" },
+  { name = "k_norm", kind = "in", elem = "f32", len = "72" },
+  { name = "cos", kind = "in", elem = "f32", len = "positions * 18" },
+  { name = "sin", kind = "in", elem = "f32", len = "positions * 18" },
+  { name = "q", kind = "out", elem = "f16", len = "16 * padded * 80" },
+  { name = "k", kind = "out", elem = "f16", len = "16 * padded * 80" },
+  { name = "vt", kind = "out", elem = "f16", len = "16 * 80 * padded" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "padded", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "positions", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["count >= 1", "columns >= 1", "columns <= positions", "count <= columns * positions", "count <= padded"]
+probes = [{ columns = 6, padded = 64, count = 18, positions = 6 }]
+
+[[launcher]]
+name = "vision_attention"
+cpp = "flat::VisionAttention"
+returns = "supported"
+doc = "Bidirectional attention of `count` tokens over the binary16 Q, K and V^T of `vision_qkv_post` (keys padded to `padded`, a multiple of 64), token-major binary16 rows of 1152."
+params = [
+  { name = "q", kind = "in", elem = "f16", len = "16 * padded * 80" },
+  { name = "k", kind = "in", elem = "f16", len = "16 * padded * 80" },
+  { name = "vt", kind = "in", elem = "f16", len = "16 * 80 * padded" },
+  { name = "out", kind = "out", elem = "f16", len = "count * 1152" },
+  { name = "count", kind = "scalar", type = "u32" },
+  { name = "padded", kind = "scalar", type = "u32" },
+]
+requires = ["count >= 1", "count <= padded", "padded % 64 == 0"]
+probes = [{ count = 18, padded = 64 }, { count = 130, padded = 192 }]
+
+[[launcher]]
+name = "vision_post_norm_add"
+cpp = "flat::VisionPostNormAdd"
+returns = "supported"
+doc = "`hidden[r] += rms(o[r]) * weight` (rows of 1152)."
+params = [
+  { name = "hidden", kind = "inout", elem = "f32", len = "rows * 1152" },
+  { name = "o", kind = "in", elem = "f32", len = "rows * 1152" },
+  { name = "weight", kind = "in", elem = "f32", len = "1152" },
+  { name = "rows", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1"]
+probes = [{ rows = 18 }]
+
+[[launcher]]
+name = "vision_geglu"
+cpp = "flat::VisionGeGlu"
+returns = "supported"
+doc = "`gelu_tanh(gate) * up` from fused [count][gate | up] rows (2 x 4304) as binary16 rows of 4320 (zero past 4304)."
+params = [
+  { name = "gate_up", kind = "in", elem = "f32", len = "count * 8608" },
+  { name = "out", kind = "out", elem = "f16", len = "count * 4320" },
+  { name = "count", kind = "scalar", type = "u32" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 18 }]
+
+[[launcher]]
+name = "vision_pool"
+cpp = "flat::VisionPool"
+returns = "supported"
+doc = "3 x 3 mean over the patch grid (`columns` patches per row) times sqrt(1152), row-major pooled cells."
+params = [
+  { name = "hidden", kind = "in", elem = "f32", len = "count * 1152" },
+  { name = "pooled", kind = "out", elem = "f32", len = "rows * 1152" },
+  { name = "columns", kind = "scalar", type = "u32" },
+  { name = "pooled_columns", kind = "scalar", type = "u32" },
+  { name = "rows", kind = "scalar", type = "u32" },
+  { name = "count", kind = "scalar", type = "u32", contract_only = true },
+]
+requires = ["rows >= 1", "pooled_columns >= 1", "pooled_columns * 3 <= columns", "rows <= pooled_columns * (count / columns / 3)"]
+probes = [{ columns = 6, pooled_columns = 2, rows = 2, count = 18 }]
+
+[[launcher]]
+name = "vision_standardize_norm"
+cpp = "flat::VisionStandardizeNorm"
+returns = "supported"
+doc = "`rms((pooled - bias) * scale)` without weight as binary16 rows of 1152."
+params = [
+  { name = "pooled", kind = "in", elem = "f32", len = "rows * 1152" },
+  { name = "bias", kind = "in", elem = "f32", len = "1152" },
+  { name = "scale", kind = "in", elem = "f32", len = "1152" },
+  { name = "out", kind = "out", elem = "f16", len = "rows * 1152" },
+  { name = "rows", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1"]
+probes = [{ rows = 2 }]

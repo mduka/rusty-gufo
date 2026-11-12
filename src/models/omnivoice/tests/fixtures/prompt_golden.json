@@ -1,0 +1,1191 @@
+{
+ "source": "k2-fsa/OmniVoice reference helpers",
+ "languages": [
+  {
+   "input": "en",
+   "id": "en"
+  },
+  {
+   "input": "de",
+   "id": "de"
+  },
+  {
+   "input": "English",
+   "id": "en"
+  },
+  {
+   "input": "english",
+   "id": "en"
+  },
+  {
+   "input": "ENGLISH",
+   "id": "en"
+  },
+  {
+   "input": "German",
+   "id": "de"
+  },
+  {
+   "input": "Deutsch",
+   "id": null
+  },
+  {
+   "input": "zh",
+   "id": "zh"
+  },
+  {
+   "input": "Chinese",
+   "id": "zh"
+  },
+  {
+   "input": "Mandarin Chinese",
+   "id": null
+  },
+  {
+   "input": "none",
+   "id": null
+  },
+  {
+   "input": "None",
+   "id": null
+  },
+  {
+   "input": "auto",
+   "id": null
+  },
+  {
+   "input": "xx",
+   "id": null
+  },
+  {
+   "input": "Ömie",
+   "id": "aom"
+  },
+  {
+   "input": "Fe'Fe'",
+   "id": "fmp"
+  },
+  {
+   "input": "yue",
+   "id": "yue"
+  },
+  {
+   "input": "Japanese",
+   "id": "ja"
+  },
+  {
+   "input": "cmn",
+   "id": null
+  }
+ ],
+ "instructs": [
+  {
+   "input": "female, low pitch, british accent",
+   "use_zh": false,
+   "output": "female, low pitch, british accent"
+  },
+  {
+   "input": "Male,  Elderly ,whisper",
+   "use_zh": false,
+   "output": "male, elderly, whisper"
+  },
+  {
+   "input": "male，young adult",
+   "use_zh": false,
+   "output": "male, young adult"
+  },
+  {
+   "input": "female, low pitch",
+   "use_zh": true,
+   "output": "女，低音调"
+  },
+  {
+   "input": "男，河南话",
+   "use_zh": false,
+   "output": "男，河南话"
+  },
+  {
+   "input": "女，中年，高音调",
+   "use_zh": false,
+   "output": "female, middle-aged, high pitch"
+  },
+  {
+   "input": "male, 四川话",
+   "use_zh": false,
+   "output": "男，四川话"
+  },
+  {
+   "input": ",female,",
+   "use_zh": false,
+   "output": "female"
+  },
+  {
+   "input": "female, male",
+   "use_zh": false,
+   "error": true
+  },
+  {
+   "input": "female, british accent, 河南话",
+   "use_zh": false,
+   "error": true
+  },
+  {
+   "input": "femal",
+   "use_zh": false,
+   "error": true
+  },
+  {
+   "input": "very loud",
+   "use_zh": false,
+   "error": true
+  },
+  {
+   "input": "   ",
+   "use_zh": false,
+   "output": null
+  }
+ ],
+ "weights": [
+  {
+   "text": "The little brown dog ran across the garden.",
+   "weight": 36.9
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "weight": 60.3
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "weight": 31.5
+  },
+  {
+   "text": "こんにちは、世界。",
+   "weight": 18.0
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "weight": 12.8
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "weight": 18.2
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "weight": 30.7
+  },
+  {
+   "text": "Chào thế giới",
+   "weight": 11.4
+  },
+  {
+   "text": "Hi.",
+   "weight": 2.5
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "weight": 42.6
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "weight": 28.8
+  },
+  {
+   "text": "（括号）text",
+   "weight": 11.0
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "weight": 43.0
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "weight": 71.6
+  }
+ ],
+ "durations": [
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 65
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 65
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 104
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 80
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 145
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 106
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 106
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 171
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 131
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 238
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 55
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 55
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 89
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 68
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 124
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 43
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 43
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 51
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 39
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 71
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 38
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 38
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 44
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 34
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 58
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 43
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 43
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 51
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 39
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 71
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 54
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 54
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 87
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 67
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 121
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 36
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 36
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 43
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 33
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 56
+  },
+  {
+   "text": "Hi.",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 22
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 22
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 26
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 20
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 33
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 75
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 75
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 121
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 93
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 168
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 51
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 51
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 81
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 62
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 113
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 36
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 36
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 42
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 32
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 55
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 76
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 76
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 122
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 94
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 169
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": null,
+   "ref_frames": null,
+   "speed": 1.0,
+   "frames": 126
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "Nice to meet you.",
+   "ref_frames": 25,
+   "speed": 1.0,
+   "frames": 126
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.0,
+   "frames": 203
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "Hello, world. This is a reference.",
+   "ref_frames": 81,
+   "speed": 1.3,
+   "frames": 156
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "你好，这是参考。",
+   "ref_frames": 60,
+   "speed": 0.8,
+   "frames": 282
+  }
+ ],
+ "combined": [
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": null,
+   "combined": "The little brown dog ran across the garden."
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. The little brown dog ran across the garden."
+  },
+  {
+   "text": "The little brown dog ran across the garden.",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 The little brown dog ran across the garden."
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": null,
+   "combined": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum."
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum."
+  },
+  {
+   "text": "Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum.",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Selbstverständlich, Sir. Ich prüfe das sofort und kümmere mich darum."
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": null,
+   "combined": "你好，世界！今天天气很好。"
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words.你好，世界！今天天气很好。"
+  },
+  {
+   "text": "你好，世界！今天天气很好。",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。你好，世界！今天天气很好。"
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": null,
+   "combined": "こんにちは、世界。"
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. こんにちは、世界。"
+  },
+  {
+   "text": "こんにちは、世界。",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 こんにちは、世界。"
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": null,
+   "combined": "नमस्ते दुनिया"
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. नमस्ते दुनिया"
+  },
+  {
+   "text": "नमस्ते दुनिया",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 नमस्ते दुनिया"
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": null,
+   "combined": "مَرْحَبًا بِالْعَالَم"
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. مَرْحَبًا بِالْعَالَم"
+  },
+  {
+   "text": "مَرْحَبًا بِالْعَالَم",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 مَرْحَبًا بِالْعَالَم"
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": null,
+   "combined": "Hello 🌍! This is fun 🎉 2026"
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Hello 🌍! This is fun 🎉 2026"
+  },
+  {
+   "text": "Hello 🌍! This is fun 🎉 2026",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Hello 🌍! This is fun 🎉 2026"
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": null,
+   "combined": "Chào thế giới"
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Chào thế giới"
+  },
+  {
+   "text": "Chào thế giới",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Chào thế giới"
+  },
+  {
+   "text": "Hi.",
+   "ref_text": null,
+   "combined": "Hi."
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Hi."
+  },
+  {
+   "text": "Hi.",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Hi."
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": null,
+   "combined": "Line oneline two with double spaces and tab"
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Line oneline two with double spaces and tab"
+  },
+  {
+   "text": "  Line one\nline two\r\n with  double   spaces\tand tab  ",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Line oneline two with double spaces and tab"
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": null,
+   "combined": "混合中文and English文字"
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words.混合中文and English文字"
+  },
+  {
+   "text": "混合 中文 and English 文字",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。混合中文and English文字"
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": null,
+   "combined": "(括号)text"
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. (括号)text"
+  },
+  {
+   "text": "（括号）text",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 (括号)text"
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": null,
+   "combined": "[laughter] That's funny [sigh] really [question-ah]"
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. [laughter] That's funny [sigh] really [question-ah]"
+  },
+  {
+   "text": "[laughter] That's funny [sigh] really [question-ah]",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 [laughter] That's funny [sigh] really [question-ah]"
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": null,
+   "combined": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite."
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "  Reference words.\n",
+   "combined": "Reference words. Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite."
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite.",
+   "ref_text": "参考文本。",
+   "combined": "参考文本。 Mr. Smith met Dr. Jones at 5 p.m. on Main St. It was late! Wasn't it? Yes; indeed: quite."
+  }
+ ],
+ "chunks": [
+  {
+   "text": "First sentence. Second one! Third? Fourth; fifth: sixth, seventh.",
+   "chunk_len": 20,
+   "chunks": [
+    "First sentence.",
+    "Second one! Third?",
+    "Fourth; fifth:",
+    "sixth, seventh."
+   ]
+  },
+  {
+   "text": "Mr. Smith met Dr. Jones. They talked for hours about nothing at all. Then they left.",
+   "chunk_len": 30,
+   "chunks": [
+    "Mr. Smith met Dr. Jones.",
+    "They talked for hours about nothing at all.",
+    "Then they left."
+   ]
+  },
+  {
+   "text": "A. B. C. Long sentence follows here with many words in it.",
+   "chunk_len": 10,
+   "chunks": [
+    "A. B. C.",
+    "Long sentence follows here with many words in it."
+   ]
+  },
+  {
+   "text": "你好。今天天气很好！我们去公园吧？好的，走吧。",
+   "chunk_len": 6,
+   "chunks": [
+    "你好。",
+    "今天天气很好！",
+    "我们去公园吧？",
+    "好的，走吧。"
+   ]
+  },
+  {
+   "text": "No punctuation at all in this rather long text that goes on and on",
+   "chunk_len": 10,
+   "chunks": [
+    "No punctuation at all in this rather long text that goes on and on"
+   ]
+  },
+  {
+   "text": "Quote: \"Hello.\" Then (aside.) more text here.",
+   "chunk_len": 12,
+   "chunks": [
+    "Quote:",
+    "\"Hello.\"",
+    "Then (aside.",
+    ") more text here."
+   ]
+  },
+  {
+   "text": "..., leading punctuation. Then text.",
+   "chunk_len": 8,
+   "chunks": [
+    "...,",
+    "leading punctuation.",
+    "Then text."
+   ]
+  }
+ ],
+ "punctuation": [
+  {
+   "input": "Hello",
+   "output": "Hello."
+  },
+  {
+   "input": "Hello.",
+   "output": "Hello."
+  },
+  {
+   "input": "Hello …",
+   "output": "Hello …"
+  },
+  {
+   "input": "你好",
+   "output": "你好。"
+  },
+  {
+   "input": "你好。",
+   "output": "你好。"
+  },
+  {
+   "input": "  spaced  ",
+   "output": "spaced."
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "Ends with quote\"",
+   "output": "Ends with quote\""
+  },
+  {
+   "input": "Ends with 、",
+   "output": "Ends with 、"
+  }
+ ],
+ "prompts": [
+  {
+   "text": "Hello there.",
+   "ref_text": null,
+   "lang": null,
+   "instruct": null,
+   "denoise": false,
+   "ref_frames": 0,
+   "target_frames": 5,
+   "text_ids": [
+    151670,
+    4064,
+    151671,
+    151672,
+    4064,
+    151673,
+    151674,
+    9707,
+    1052,
+    13,
+    151675
+   ],
+   "audio_start": 11,
+   "length": 16
+  },
+  {
+   "text": "Hello there.",
+   "ref_text": null,
+   "lang": "en",
+   "instruct": "female, low pitch",
+   "denoise": false,
+   "ref_frames": 0,
+   "target_frames": 5,
+   "text_ids": [
+    151670,
+    268,
+    151671,
+    151672,
+    42634,
+    11,
+    3347,
+    9649,
+    151673,
+    151674,
+    9707,
+    1052,
+    13,
+    151675
+   ],
+   "audio_start": 14,
+   "length": 19
+  },
+  {
+   "text": "Selbstverständlich, Sir.",
+   "ref_text": "Ich prüfe das.",
+   "lang": "de",
+   "instruct": null,
+   "denoise": true,
+   "ref_frames": 37,
+   "target_frames": 5,
+   "text_ids": [
+    151669,
+    151670,
+    450,
+    151671,
+    151672,
+    4064,
+    151673,
+    151674,
+    40369,
+    548,
+    2391,
+    1859,
+    6616,
+    13,
+    91452,
+    142675,
+    11,
+    16759,
+    13,
+    151675
+   ],
+   "audio_start": 20,
+   "length": 62
+  },
+  {
+   "text": "Selbstverständlich, Sir.",
+   "ref_text": "Ich prüfe das.",
+   "lang": "de",
+   "instruct": null,
+   "denoise": false,
+   "ref_frames": 37,
+   "target_frames": 5,
+   "text_ids": [
+    151670,
+    450,
+    151671,
+    151672,
+    4064,
+    151673,
+    151674,
+    40369,
+    548,
+    2391,
+    1859,
+    6616,
+    13,
+    91452,
+    142675,
+    11,
+    16759,
+    13,
+    151675
+   ],
+   "audio_start": 19,
+   "length": 61
+  },
+  {
+   "text": "[laughter] That's funny.",
+   "ref_text": null,
+   "lang": "en",
+   "instruct": null,
+   "denoise": true,
+   "ref_frames": 0,
+   "target_frames": 5,
+   "text_ids": [
+    151670,
+    268,
+    151671,
+    151672,
+    4064,
+    151673,
+    151674,
+    58,
+    51783,
+    60,
+    2938,
+    594,
+    15173,
+    13,
+    151675
+   ],
+   "audio_start": 15,
+   "length": 20
+  },
+  {
+   "text": "你好，世界！",
+   "ref_text": "参考文本。",
+   "lang": "zh",
+   "instruct": "女，中年",
+   "denoise": true,
+   "ref_frames": 12,
+   "target_frames": 5,
+   "text_ids": [
+    151669,
+    151670,
+    23815,
+    151671,
+    151672,
+    57750,
+    3837,
+    15946,
+    7948,
+    151673,
+    151674,
+    101275,
+    108704,
+    1773,
+    108386,
+    3837,
+    99489,
+    6313,
+    151675
+   ],
+   "audio_start": 19,
+   "length": 36
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+# Python tools: reference forwards, benchmarks, charts, model downloads and
+# the functional client. Install into a virtual environment (Python 3.13 or
+# newer):
+#
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r tools/requirements.txt
+#
+# PyTorch comes from its ROCm 7.2 wheel index and brings its own ROCm
+# libraries; the gufo binary links the installed ROCm instead.
+--extra-index-url https://download.pytorch.org/whl/rocm7.2
+-r ci/requirements.txt
+-r ../tests/functional/requirements.txt
+torch==2.12.0+rocm7.2
+torchvision==0.27.0+rocm7.2
+transformers==5.14.1
+accelerate==1.13.0
+safetensors==0.8.0
+huggingface-hub==1.26.0
+requests==2.34.2
+av==17.0.1
+scipy==1.18.0
+matplotlib==3.11.1

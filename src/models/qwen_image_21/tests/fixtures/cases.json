@@ -1,0 +1,30 @@
+{
+  "comment": "Parity cases of the Rust Qwen-Image-2.1 engine against the C++ engine (tests/parity.rs, tests/reference/cpp_reference.cpp). Reference images are synthetic: pattern p at (x, y) is R = (x * (3 + p) + 5 * y) & 255, G = (x * y + 17 * p) & 255, B = ((x ^ y) * 7 + 31 * p) & 255, A = 255 for even p and ((x + 2 * y) * 3) & 255 for odd p. Observe `all` keeps every tensor of the C++ observer, `coarse` the stage outputs and latents.",
+  "tokenizer": [
+    "A red cube on a white table.",
+    "  café  déjà vu",
+    "नमस्ते 世界 안녕하세요",
+    "if x == 123:\n    print(\"hello\")\n\n",
+    "I'm don't they've won't",
+    "<|im_start|>user\n<image1><|vision_start|><|image_pad|><|vision_end|>",
+    "It'ſ a TEST'S 'LL 'Re",
+    "tabs\tand nbsp line\u0085next\r\nwin\rold",
+    "ét⃝ ́x à̖ KÅ",
+    "emoji 😀👍🏽 and العربية עברית",
+    "numbers ١٢٣ Ⅷ ½ 3.14159 1,000,000",
+    "   leading and trailing   ",
+    "\n\n\n",
+    "x<|im_end|><|im_end|>y<|endoftext|>",
+    "",
+    "Change the cube to blue."
+  ],
+  "generations": [
+    { "name": "cube", "prompt": "A red cube on a white table.", "width": 256, "height": 256, "steps": 2, "seed": 42, "images": [], "observe": "all" },
+    { "name": "wide", "prompt": "A lighthouse at dusk, été 大海, 3 boats", "width": 384, "height": 256, "steps": 3, "seed": 7, "images": [], "observe": "all" },
+    { "name": "empty", "prompt": "", "width": 256, "height": 320, "steps": 2, "seed": 4294967297, "images": [], "observe": "coarse" },
+    { "name": "edit", "prompt": "Change the cube to blue.", "width": 256, "height": 256, "steps": 2, "seed": 42, "images": [{ "width": 640, "height": 480, "pattern": 0 }], "observe": "coarse" },
+    { "name": "two", "prompt": "Put the second object next to the first.", "width": 256, "height": 384, "steps": 2, "seed": 3, "images": [{ "width": 300, "height": 500, "pattern": 1 }, { "width": 96, "height": 64, "pattern": 2 }], "observe": "coarse" },
+    { "name": "square", "prompt": "A detailed city map with tiny labels.", "width": 1024, "height": 1024, "steps": 2, "seed": 1, "images": [], "observe": "coarse" },
+    { "name": "portrait", "prompt": "A tall glass of water.", "width": 512, "height": 768, "steps": 2, "seed": 5, "images": [], "observe": "coarse" }
+  ]
+}

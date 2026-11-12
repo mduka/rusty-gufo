@@ -1,0 +1,1681 @@
+# Kernel contract for the Nemotron-H kernels (docs/development/DESIGN.md).
+# Extents are element counts (bytes for `bytes`); the C++ launchers are the
+# flat adapters of rocm/adapters.hpp, which take `hipStream_t` last. Trusted
+# base: a wrong extent compiles and lets a kernel overrun its buffer. Review
+# changes like unsafe code; every launcher needs probes (tests/extents.rs).
+#
+# Block sizes: Q8_0 34 bytes per 32 values, IQ2_XXS 66 per 256, NVFP4 36 per
+# 64, Q8_1 activations 36 per 32.
+#
+# The per-sequence (`*_rows`) launchers take one buffer per row as a list;
+# the adapter copies the device pointers into `device_tables` (pageable,
+# stream ordered) before the launch, so they can't be recorded in a graph.
+
+[library]
+name = "nemotron"
+root = "../../../.."
+namespace = "gufo::models::nemotron::rocm::flat"
+headers = [
+  "src/models/nemotron/kernels/rocm/adapters.hpp",
+]
+
+# The extension's CMake target gufo_nemotron_hip: -O3 over the preset's -O2.
+[[source]]
+path = "src/models/nemotron/kernels/rocm/drafter_kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/gemm.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/gemv.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/sample.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/vision.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/adapters.hip"
+
+[[source]]
+path = "src/models/nemotron/kernels/rocm/adapters_drafter.hip"
+
+# gufo_nemotron_mmq: the quantized tier adapted from llama.cpp keeps its C++17
+# dialect, fast math and upstream style (kernels/rocm/mmq/VENDOR.md).
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/nb_ggml_stubs.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/nb_mmq.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/mmq_instance_iq2_xxs.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/mmq_instance_nvfp4.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/mmq_instance_q8_0.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/mmvq.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+[[source]]
+path = "src/models/nemotron/kernels/rocm/mmq/quantize.hip.cpp"
+std = "c++17"
+flags = ["-O3", "-ffast-math", "-fno-finite-math-only", "-w"]
+defines = ["GGML_USE_HIP", "GGML_HIP_NO_VMM"]
+
+# --- Trunk (kernels.hpp) -------------------------------------------------------
+
+[[launcher]]
+name = "embed_q8_0"
+cpp = "EmbedQ8_0"
+returns = "supported"
+doc = "`x[t]` = dequantized Q8_0 row `tokens[t]` of the embedding table (`vocab` rows of `hidden` values)."
+params = [
+  { name = "table", kind = "in", elem = "bytes", len = "vocab * (hidden / 32) * 34" },
+  { name = "tokens", kind = "indices", signed = true, len = "n_tokens", below = "vocab" },
+  { name = "x", kind = "out", elem = "f32", len = "n_tokens * hidden" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "hidden", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "hidden >= 32", "hidden % 32 == 0"]
+probes = [
+  { n_tokens = 3, hidden = 2688, vocab = 5 },
+  { n_tokens = 1, hidden = 32, vocab = 1 },
+]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "RmsNorm"
+returns = "supported"
+doc = "`out[r] = x[r] / sqrt(mean(x[r]^2) + eps) * w`."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "w", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 3, width = 2688, eps = 1e-05 },
+  { rows = 1, width = 1, eps = 1e-05 },
+]
+
+[[launcher]]
+name = "rms_norm_f16"
+cpp = "RmsNormF16"
+returns = "supported"
+doc = "`rms_norm` with the F32 result rounded to FP16 (nearest even) as it stores."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "w", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 3, width = 2688, eps = 1e-05 },
+  { rows = 1, width = 1, eps = 1e-05 },
+]
+
+[[launcher]]
+name = "rms_norm_q8"
+cpp = "RmsNormQ8"
+returns = "supported"
+doc = "RMSNorm of short chunks writing F32 rows to `out` and/or Q8_1 rows to `q8` (either may be absent)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "w", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * width", optional = true },
+  { name = "q8", kind = "out", elem = "bytes", len = "rows * (width / 32) * 36", optional = true },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1", "width >= 128", "width <= 4096", "width % 128 == 0"]
+probes = [
+  { rows = 3, width = 2688, eps = 1e-05, with = ["out", "q8"] },
+  { rows = 1, width = 128, eps = 1e-05, with = ["q8"] },
+]
+
+[[launcher]]
+name = "quantize_q8_1"
+cpp = "QuantizeQ8_1"
+returns = "supported"
+doc = "`x` rows to Q8_1 rows."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "q8", kind = "out", elem = "bytes", len = "rows * (width / 32) * 36" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1", "width >= 128", "width <= 4096", "width % 128 == 0"]
+probes = [
+  { rows = 3, width = 4096 },
+  { rows = 1, width = 128 },
+]
+
+[[launcher]]
+name = "add_scaled"
+cpp = "AddScaled"
+returns = "supported"
+doc = "`x[i] += scale * a[i]` (`+ b[i]` when `b` is present)."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n" },
+  { name = "a", kind = "in", elem = "f32", len = "n" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "b", kind = "in", elem = "f32", len = "n", optional = true },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+requires = ["n >= 1"]
+probes = [
+  { scale = 0.5, n = 1000, with = ["b"] },
+  { scale = 1.0, n = 1 },
+]
+
+[[launcher]]
+name = "relu2"
+cpp = "Relu2"
+returns = "supported"
+doc = "`max(x, 0)^2` in place."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+requires = ["n >= 1"]
+probes = [
+  { n = 1000 },
+  { n = 1 },
+]
+
+[[launcher]]
+name = "mamba_conv"
+cpp = "MambaConv"
+returns = "supported"
+doc = "Mamba-2 causal depthwise convolution with SiLU over the x|B|C channels of `proj` rows (from `xbc_offset`, times `in_scale`); `state` holds `kernel - 1` rows of earlier raw scaled inputs."
+params = [
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "xbc_offset", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "state", kind = "in", elem = "f32", len = "(kernel - 1) * channels" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * channels" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+requires = ["n_tokens >= 1", "channels >= 1", "kernel >= 1", "xbc_offset + channels <= stride"]
+probes = [
+  { stride = 40, xbc_offset = 8, in_scale = 0.5, n_tokens = 5, channels = 32, kernel = 4 },
+  { stride = 1, xbc_offset = 0, in_scale = 1.0, n_tokens = 1, channels = 1, kernel = 1 },
+]
+
+[[launcher]]
+name = "mamba_conv_state"
+cpp = "MambaConvState"
+returns = "supported"
+doc = "Shifts the last `kernel - 1` raw inputs of this chunk into `state`."
+params = [
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "xbc_offset", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "state", kind = "inout", elem = "f32", len = "(kernel - 1) * channels" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+requires = ["n_tokens >= 1", "channels >= 1", "kernel >= 2", "kernel <= 9", "xbc_offset + channels <= stride"]
+probes = [
+  { stride = 40, xbc_offset = 8, in_scale = 0.5, n_tokens = 2, channels = 32, kernel = 4 },
+  { stride = 3, xbc_offset = 2, in_scale = 1.0, n_tokens = 1, channels = 1, kernel = 9 },
+]
+
+[[launcher]]
+name = "mamba_scan"
+cpp = "MambaScan"
+returns = "supported"
+doc = "Selective scan with a scalar decay per head, token by token (`MambaScanArgs` without row states); d_state 128, head_dim 64. `state` is `[head][128][64]`; with `write_state` false it is left as it was."
+params = [
+  { name = "xbc", kind = "in", elem = "f32", len = "n_tokens * channels" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "dt_offset", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "dt_bias", kind = "in", elem = "f32", len = "heads" },
+  { name = "a", kind = "in", elem = "f32", len = "heads" },
+  { name = "d", kind = "in", elem = "f32", len = "heads" },
+  { name = "state", kind = "inout", elem = "f32", len = "heads * 128 * 64" },
+  { name = "y", kind = "out", elem = "f32", len = "n_tokens * heads * 64" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+  { name = "write_state", kind = "scalar", type = "bool" },
+]
+requires = ["n_tokens >= 1", "heads >= 1", "head_dim == 64", "groups >= 1", "heads % groups == 0", "channels % 4 == 0", "heads * 64 + 2 * groups * 128 <= channels", "dt_offset + heads <= stride"]
+probes = [
+  { channels = 1536, stride = 1600, dt_offset = 1550, in_scale = 1.0, n_tokens = 9, heads = 16, head_dim = 64, groups = 2, write_state = true },
+  { channels = 320, stride = 1, dt_offset = 0, in_scale = 1.0, n_tokens = 1, heads = 1, head_dim = 64, groups = 1, write_state = false },
+]
+
+[[launcher]]
+name = "mamba_gate_norm_q8"
+cpp = "MambaGateNormQ8"
+returns = "supported"
+doc = "`mamba_gate_norm` for short chunks into Q8_1 rows of `inner` values; groups hold 1024 values."
+params = [
+  { name = "y", kind = "in", elem = "f32", len = "n_tokens * inner" },
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "inner" },
+  { name = "q8", kind = "out", elem = "bytes", len = "n_tokens * (inner / 32) * 36" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "inner", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_tokens >= 1", "groups >= 1", "inner == groups * 1024", "stride % 4 == 0", "inner <= stride"]
+probes = [
+  { stride = 4096, in_scale = 1.0, n_tokens = 3, inner = 4096, groups = 4, eps = 1e-05 },
+  { stride = 1024, in_scale = 1.0, n_tokens = 1, inner = 1024, groups = 1, eps = 1e-05 },
+]
+
+[[launcher]]
+name = "mamba_gate_norm"
+cpp = "MambaGateNorm"
+returns = "supported"
+doc = "`y = RMSNorm per group(y * silu(z * in_scale)) * w` in place; z is the first `inner` floats of each `proj` row."
+params = [
+  { name = "y", kind = "inout", elem = "f32", len = "n_tokens * inner" },
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "inner" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "inner", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_tokens >= 1", "groups >= 1", "inner % groups == 0", "inner <= stride"]
+probes = [
+  { stride = 4100, in_scale = 1.0, n_tokens = 3, inner = 4096, groups = 8, eps = 1e-05 },
+  { stride = 1, in_scale = 1.0, n_tokens = 1, inner = 1, groups = 1, eps = 1e-05 },
+]
+
+[[launcher]]
+name = "mamba_gate_norm_f16"
+cpp = "MambaGateNormF16"
+returns = "supported"
+doc = "`mamba_gate_norm` storing the result to `out` rounded to FP16; `y` keeps the gated values."
+params = [
+  { name = "y", kind = "inout", elem = "f32", len = "n_tokens * inner" },
+  { name = "proj", kind = "in", elem = "f32", len = "n_tokens * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "inner" },
+  { name = "out", kind = "out", elem = "f16", len = "n_tokens * inner" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "inner", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["n_tokens >= 1", "groups >= 1", "inner % groups == 0", "inner <= stride"]
+probes = [
+  { stride = 4100, in_scale = 1.0, n_tokens = 3, inner = 4096, groups = 8, eps = 1e-05 },
+  { stride = 1, in_scale = 1.0, n_tokens = 1, inner = 1, groups = 1, eps = 1e-05 },
+]
+
+[[launcher]]
+name = "kv_append"
+cpp = "KvAppend"
+returns = "supported"
+doc = "Stores `n_tokens` rows of K and V as half at positions `pos[0]..pos[0] + n_tokens` of caches with `capacity` rows."
+params = [
+  { name = "k", kind = "in", elem = "f32", len = "n_tokens * kv_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "n_tokens * kv_dim" },
+  { name = "k_cache", kind = "inout", elem = "f16", len = "capacity * kv_dim" },
+  { name = "v_cache", kind = "inout", elem = "f16", len = "capacity * kv_dim" },
+  { name = "pos", kind = "indices", signed = true, len = "1", below = "capacity - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "kv_dim", kind = "scalar", type = "usize" },
+  { name = "capacity", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "kv_dim >= 1", "n_tokens <= capacity", "capacity <= 1073741824"]
+probes = [
+  { n_tokens = 3, kv_dim = 256, capacity = 9 },
+  { n_tokens = 1, kv_dim = 1, capacity = 1 },
+]
+
+[[launcher]]
+name = "attention"
+cpp = "Attention"
+returns = "supported"
+doc = "Causal GQA on FP16 WMMA for queries at `pos[0]..pos[0] + n_tokens` over cache positions up to each query; head_dim 128, 16 query heads per KV head."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "capacity * kv_heads * 128" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "capacity * kv_heads * 128" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "pos", kind = "indices", signed = true, len = "1", below = "capacity - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "capacity", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "kv_heads >= 1", "heads == kv_heads * 16", "n_tokens <= capacity", "capacity <= 1073741824"]
+probes = [
+  { n_tokens = 9, heads = 32, kv_heads = 2, scale = 0.088, capacity = 70 },
+  { n_tokens = 1, heads = 16, kv_heads = 1, scale = 1.0, capacity = 1 },
+]
+
+[[launcher]]
+name = "attention_short"
+cpp = "AttentionShort"
+returns = "supported"
+doc = "`attention` for chunks of up to 8 queries with the keys split over 64 blocks per KV head, merged after; `partial` holds `n_tokens * heads * 64 * 130` floats."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "k_cache", kind = "in", elem = "f16", len = "capacity * kv_heads * 128" },
+  { name = "v_cache", kind = "in", elem = "f16", len = "capacity * kv_heads * 128" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "pos", kind = "indices", signed = true, len = "1", below = "capacity - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "partial", kind = "out", elem = "f32", len = "n_tokens * heads * 64 * 130" },
+  { name = "capacity", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "n_tokens <= 8", "kv_heads >= 1", "heads == kv_heads * 16", "n_tokens <= capacity", "capacity <= 1073741824"]
+probes = [
+  { n_tokens = 8, heads = 32, kv_heads = 2, scale = 0.088, capacity = 200 },
+  { n_tokens = 1, heads = 16, kv_heads = 1, scale = 1.0, capacity = 1 },
+]
+
+[[launcher]]
+name = "mamba_conv_rows"
+cpp = "MambaConvRows"
+returns = "supported"
+doc = "`mamba_conv` then `mamba_conv_state` of a one-token chunk for each of `rows` sequences: row r of `proj` is sequence r's token and `states[r]` its history (`kernel - 1` rows); the table of `states` goes through `device_tables`."
+params = [
+  { name = "proj", kind = "in", elem = "f32", len = "rows * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "xbc_offset", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "states", kind = "inout", elem = "f32", list = "rows", len = "(kernel - 1) * channels" },
+  { name = "device_tables", kind = "out", elem = "bytes", len = "rows * 8" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * channels" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1", "channels >= 1", "kernel >= 2", "kernel <= 9", "xbc_offset + channels <= stride"]
+probes = [
+  { stride = 40, xbc_offset = 8, in_scale = 0.5, rows = 3, channels = 32, kernel = 4 },
+  { stride = 3, xbc_offset = 2, in_scale = 1.0, rows = 1, channels = 1, kernel = 9 },
+]
+
+[[launcher]]
+name = "mamba_scan_rows"
+cpp = "MambaScanRows"
+returns = "supported"
+doc = "`mamba_scan` of a one-token chunk for each of `rows` sequences (`MambaScanArgs::row_states`): row r scans with `states[r]` (`[head][128][64]`) and writes it; the table goes through `device_tables`."
+params = [
+  { name = "xbc", kind = "in", elem = "f32", len = "rows * channels" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "proj", kind = "in", elem = "f32", len = "rows * stride" },
+  { name = "stride", kind = "scalar", type = "usize" },
+  { name = "dt_offset", kind = "scalar", type = "usize" },
+  { name = "in_scale", kind = "scalar", type = "f32" },
+  { name = "dt_bias", kind = "in", elem = "f32", len = "heads" },
+  { name = "a", kind = "in", elem = "f32", len = "heads" },
+  { name = "d", kind = "in", elem = "f32", len = "heads" },
+  { name = "states", kind = "inout", elem = "f32", list = "rows", len = "heads * 128 * 64" },
+  { name = "device_tables", kind = "out", elem = "bytes", len = "rows * 8" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * heads * 64" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "groups", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1", "heads >= 1", "head_dim == 64", "groups >= 1", "heads % groups == 0", "channels % 4 == 0", "heads * 64 + 2 * groups * 128 <= channels", "dt_offset + heads <= stride"]
+probes = [
+  { channels = 1536, stride = 1600, dt_offset = 1550, in_scale = 1.0, rows = 3, heads = 16, head_dim = 64, groups = 2 },
+  { channels = 320, stride = 1, dt_offset = 0, in_scale = 1.0, rows = 1, heads = 1, head_dim = 64, groups = 1 },
+]
+
+[[launcher]]
+name = "kv_append_rows"
+cpp = "KvAppendRows"
+returns = "supported"
+doc = "`kv_append` of one token for each of `rows` sequences: row r's K and V at `row_positions[r]` of `k_caches[r]` / `v_caches[r]` (`capacity` rows each); the tables go through `device_tables` (K first)."
+params = [
+  { name = "k", kind = "in", elem = "f32", len = "rows * kv_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "rows * kv_dim" },
+  { name = "k_caches", kind = "inout", elem = "f16", list = "rows", len = "capacity * kv_dim" },
+  { name = "v_caches", kind = "inout", elem = "f16", list = "rows", len = "capacity * kv_dim" },
+  { name = "device_tables", kind = "out", elem = "bytes", len = "2 * rows * 8" },
+  { name = "row_positions", kind = "indices", signed = true, len = "rows", below = "capacity" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "kv_dim", kind = "scalar", type = "usize" },
+  { name = "capacity", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 1", "kv_dim >= 1", "capacity >= 1", "capacity <= 1073741824"]
+probes = [
+  { rows = 3, kv_dim = 256, capacity = 9 },
+  { rows = 1, kv_dim = 1, capacity = 1 },
+]
+
+[[launcher]]
+name = "attention_short_rows"
+cpp = "AttentionShortRows"
+returns = "supported"
+doc = "`attention_short` of one query for each of `rows` sequences (at most 8): row r at `row_positions[r]` over `k_caches[r]` / `v_caches[r]` (`capacity` rows each), with the arithmetic of a one-token `attention_short`; the tables go through `device_tables` (K first)."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * 128" },
+  { name = "k_caches", kind = "in", elem = "f16", list = "rows", len = "capacity * kv_heads * 128" },
+  { name = "v_caches", kind = "in", elem = "f16", list = "rows", len = "capacity * kv_heads * 128" },
+  { name = "device_tables", kind = "out", elem = "bytes", len = "2 * rows * 8" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * heads * 128" },
+  { name = "row_positions", kind = "indices", signed = true, len = "rows", below = "capacity" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "partial", kind = "out", elem = "f32", len = "rows * heads * 64 * 130" },
+  { name = "capacity", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 1", "rows <= 8", "kv_heads >= 1", "heads == kv_heads * 16", "capacity >= 1", "capacity <= 1073741824"]
+probes = [
+  { rows = 8, heads = 32, kv_heads = 2, scale = 0.088, capacity = 200 },
+  { rows = 1, heads = 16, kv_heads = 1, scale = 1.0, capacity = 1 },
+]
+
+[[launcher]]
+name = "router_logits"
+cpp = "RouterLogits"
+returns = "supported"
+doc = "Router logits `out[t][r] = sum_c w[r][c] * x[t][c]` for F32 weights of `rows` x `cols`, streaming the weights once."
+params = [
+  { name = "w", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * cols" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1", "n_tokens >= 1", "n_tokens <= 8", "cols % 1024 == 0"]
+probes = [
+  { rows = 512, cols = 3072, n_tokens = 8 },
+  { rows = 1, cols = 1024, n_tokens = 1 },
+  { rows = 4100, cols = 1024, n_tokens = 2 },
+  { rows = 1030, cols = 1024, n_tokens = 1 },
+]
+
+[[launcher]]
+name = "router_top_k"
+cpp = "RouterTopK"
+returns = "supported"
+doc = "Sigmoid scores, selection by score + bias, top-k ids and weights of the raw scores, optionally normalized, times `scale`; ties choose the lower expert. Trusted: the ids are below `n_experts` for logits without NaN."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "n_tokens * n_experts" },
+  { name = "bias", kind = "in", elem = "f32", len = "n_experts" },
+  { name = "n_experts", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "normalize", kind = "scalar", type = "bool" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "ids", kind = "indices_out", signed = true, len = "n_tokens * k", below = "n_experts" },
+  { name = "weights", kind = "out", elem = "f32", len = "n_tokens * k" },
+]
+requires = ["n_tokens >= 1", "n_experts <= 512", "k <= 32", "k <= n_experts"]
+probes = [
+  { n_experts = 512, n_tokens = 3, k = 22, normalize = true, scale = 2.5 },
+  { n_experts = 1, n_tokens = 1, k = 1, normalize = false, scale = 1.0 },
+]
+
+[[launcher]]
+name = "weighted_slot_sum"
+cpp = "WeightedSlotSum"
+returns = "supported"
+doc = "`out[t] = sum_s weights[t * k + s] * slots[t * k + s]` (rows of `width`)."
+params = [
+  { name = "slots", kind = "in", elem = "f32", len = "n_tokens * k * width" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * k" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * width" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["n_tokens >= 1", "width >= 1"]
+probes = [
+  { n_tokens = 3, k = 22, width = 1024 },
+  { n_tokens = 1, k = 1, width = 1 },
+]
+
+[[launcher]]
+name = "weighted_slot_sum_q8"
+cpp = "WeightedSlotSumQ8"
+returns = "supported"
+doc = "`weighted_slot_sum` into Q8_1 rows."
+params = [
+  { name = "slots", kind = "in", elem = "f32", len = "n_tokens * k * width" },
+  { name = "weights", kind = "in", elem = "f32", len = "n_tokens * k" },
+  { name = "q8", kind = "out", elem = "bytes", len = "n_tokens * (width / 32) * 36" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["n_tokens >= 1", "width >= 128", "width <= 4096", "width % 128 == 0"]
+probes = [
+  { n_tokens = 3, k = 22, width = 1024 },
+  { n_tokens = 1, k = 1, width = 128 },
+]
+
+# --- Products (gemm.hpp, gemv.hpp) ---------------------------------------------
+
+[[launcher]]
+name = "nvfp4_gemm"
+cpp = "Nvfp4Gemm"
+returns = "supported"
+doc = "`out[t][r] = sum_c W[r][c] x[t][c]` for NVFP4 weights and FP16 activations, without the per-tensor scale."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "rows * (cols / 64) * 36" },
+  { name = "x", kind = "in", elem = "f16", len = "n_tokens * cols" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 128", "rows % 128 == 0", "cols >= 64", "cols % 64 == 0", "n_tokens >= 1"]
+probes = [
+  { rows = 256, cols = 192, n_tokens = 130 },
+  { rows = 8192, cols = 64, n_tokens = 300 },
+  { rows = 128, cols = 64, n_tokens = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_route_slots"
+cpp = "Iq2xxsRouteSlots"
+returns = "supported"
+doc = "Groups the `slots` slots of `ids` by expert: `order` (slot indices by expert), `tiles` (`{expert, first, count, 0}` per tile of up to 32 slots, `slots / 32 + experts` tiles at most) and `num_tiles`; `cursor` is scratch. Trusted: tiles name experts below `experts`, slot ranges within `order` and counts of at most 32."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "cursor", kind = "out", elem = "i32", len = "experts" },
+  { name = "order", kind = "indices_out", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "tiles", kind = "indices_out", signed = true, len = "(slots / 32 + experts) * 4", below = "slots + experts + 33", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices_out", signed = true, len = "1", below = "slots / 32 + experts + 1", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "experts", kind = "scalar", type = "usize" },
+]
+requires = ["slots >= 1", "experts >= 1", "experts <= 1024"]
+probes = [
+  { slots = 130, experts = 512 },
+  { slots = 1, experts = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_routed_gemm"
+cpp = "Iq2xxsRoutedGemm"
+returns = "supported"
+doc = "Routed `out[slot] = W[expert] x` for IQ2_XXS experts on BF16 WMMA over the route of `ids`, one `x` row per token (slot / used); stores `max(out, 0)^2` with `relu2`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "f32", len = "slots / used * cols" },
+  { name = "out", kind = "out", elem = "f32", len = "slots * rows" },
+  { name = "order", kind = "indices", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "tiles", kind = "indices", signed = true, len = "(slots / 32 + experts) * 4", below = "slots + experts + 33", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices", signed = true, len = "1", below = "slots / 32 + experts + 1", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "experts", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "false" },
+]
+requires = ["slots >= 1", "experts >= 1", "experts <= 1024", "used >= 1", "slots % used == 0", "rows >= 256", "rows % 256 == 0", "cols >= 256", "cols % 256 == 0"]
+probes = [
+  { rows = 512, cols = 512, relu2 = true, slots = 130, experts = 4, used = 2 },
+  { rows = 256, cols = 256, relu2 = false, slots = 1, experts = 1, used = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_routed_gemm_per_slot"
+cpp = "Iq2xxsRoutedGemm"
+returns = "supported"
+doc = "Routed `out[slot] = W[expert] x` for IQ2_XXS experts on BF16 WMMA over the route of `ids`, one `x` row per slot; stores `max(out, 0)^2` with `relu2`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "f32", len = "slots * cols" },
+  { name = "out", kind = "out", elem = "f32", len = "slots * rows" },
+  { name = "order", kind = "indices", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "tiles", kind = "indices", signed = true, len = "(slots / 32 + experts) * 4", below = "slots + experts + 33", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices", signed = true, len = "1", below = "slots / 32 + experts + 1", derived_from = "ids", tag = "slots * 2048 + experts" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "experts", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "true" },
+]
+requires = ["slots >= 1", "experts >= 1", "experts <= 1024", "used >= 1", "slots % used == 0", "rows >= 256", "rows % 256 == 0", "cols >= 256", "cols % 256 == 0"]
+probes = [
+  { rows = 512, cols = 512, relu2 = true, slots = 130, experts = 4, used = 2 },
+  { rows = 256, cols = 256, relu2 = false, slots = 1, experts = 1, used = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv"
+cpp = "Iq2xxsGemv"
+returns = "supported"
+doc = "Dense `out = W x` for IQ2_XXS weights on up to 8 activation rows (BF16 products, F32 sums); `relu2` stores `max(out, 0)^2`, `accumulate` adds into `out`."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * cols" },
+  { name = "out", kind = "inout", elem = "f32", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "n_tokens >= 1", "n_tokens <= 8"]
+probes = [
+  { rows = 64, cols = 2304, n_tokens = 8, relu2 = true, accumulate = false },
+  { rows = 32, cols = 256, n_tokens = 1, relu2 = false, accumulate = true },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_routed"
+cpp = "Iq2xxsGemvRouted"
+returns = "supported"
+doc = "Routed `out[slot] = W[ids[slot]] x` for IQ2_XXS experts, one `x` row per token; `relu2` and `accumulate` as `iq2xxs_gemv`."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * cols" },
+  { name = "ids", kind = "indices", signed = true, len = "n_tokens * used", below = "experts" },
+  { name = "out", kind = "inout", elem = "f32", len = "n_tokens * used * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "n_tokens >= 1", "n_tokens <= 8", "used >= 1", "experts >= 1"]
+probes = [
+  { rows = 64, cols = 512, n_tokens = 3, used = 22, relu2 = true, accumulate = false, experts = 5 },
+  { rows = 32, cols = 256, n_tokens = 1, used = 1, relu2 = false, accumulate = true, experts = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_routed_per_slot"
+cpp = "Iq2xxsGemvRouted"
+returns = "supported"
+doc = "Routed `out[slot] = W[ids[slot]] x` for IQ2_XXS experts, one `x` row per slot; `relu2` and `accumulate` as `iq2xxs_gemv`."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * used * cols" },
+  { name = "ids", kind = "indices", signed = true, len = "n_tokens * used", below = "experts" },
+  { name = "out", kind = "inout", elem = "f32", len = "n_tokens * used * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "n_tokens >= 1", "n_tokens <= 8", "used >= 1", "experts >= 1"]
+probes = [
+  { rows = 64, cols = 512, n_tokens = 3, used = 22, relu2 = true, accumulate = false, experts = 5 },
+  { rows = 32, cols = 256, n_tokens = 1, used = 1, relu2 = false, accumulate = true, experts = 1 },
+]
+
+[[launcher]]
+name = "activations_to_bf16"
+cpp = "ActivationsToBf16"
+returns = "supported"
+doc = "`out = bf16(x)` for the BF16 vector products, round to nearest even (gemv.hpp's `ToBf16`)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n" },
+  { name = "out", kind = "out", elem = "bf16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+requires = ["n >= 4", "n % 4 == 0"]
+probes = [
+  { n = 1000 },
+  { n = 4 },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_bf16"
+cpp = "Iq2xxsGemvBf16"
+returns = "supported"
+doc = "Dense `out = W x` for IQ2_XXS weights on exactly `n_tokens` BF16 activation rows, bit-identical to the one-token product of each row; `relu2` stores `max(out, 0)^2`, `accumulate` adds into `out`."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "bf16", len = "n_tokens * cols" },
+  { name = "out", kind = "inout", elem = "f32", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "n_tokens >= 1", "n_tokens <= 8"]
+probes = [
+  { rows = 64, cols = 2304, n_tokens = 8, relu2 = true, accumulate = false },
+  { rows = 32, cols = 256, n_tokens = 1, relu2 = false, accumulate = true },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_bf16_store_bf16"
+cpp = "Iq2xxsGemvBf16StoreBf16"
+returns = "supported"
+doc = "`iq2xxs_gemv_bf16` storing BF16 rows (rounded to nearest even), for a product that feeds another."
+params = [
+  { name = "weights", kind = "in", elem = "bytes", len = "rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "bf16", len = "n_tokens * cols" },
+  { name = "out", kind = "out", elem = "bf16", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "n_tokens >= 1", "n_tokens <= 8"]
+probes = [
+  { rows = 64, cols = 2304, n_tokens = 8, relu2 = true },
+  { rows = 32, cols = 256, n_tokens = 1, relu2 = false },
+]
+
+[[launcher]]
+name = "iq2xxs_route_short"
+cpp = "Iq2xxsRouteShort"
+returns = "supported"
+doc = "Groups a short chunk's `slots` slots of `ids` by expert in one block: `order` (slot indices by expert), `tiles` (`{expert, first, count, 0}` per expert, in the order of each expert's first slot) and `num_tiles`. Trusted: tiles name experts below `experts`, slot ranges within `order`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "order", kind = "indices_out", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "tiles", kind = "indices_out", signed = true, len = "slots * 4", below = "slots + experts + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices_out", signed = true, len = "1", below = "slots + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["slots >= 1", "slots <= 128", "experts >= 1"]
+probes = [
+  { slots = 128, experts = 512 },
+  { slots = 1, experts = 1 },
+]
+
+# The tiles launchers' probes fill the route with one tile {expert, first,
+# count} = {v, v, v} whose slots are the last slot, so the furthest expert,
+# activation row and output row are reached.
+[[launcher]]
+name = "iq2xxs_gemv_tiles"
+cpp = "Iq2xxsGemvTiles"
+returns = "supported"
+doc = "Routed `out[slot] = W[expert] x` for IQ2_XXS experts on BF16 activations over the short route of `ids` (each expert once for all of its slots), one `x` row per token (slot / used); stores F32 rows (`accumulate` adds into `out`), `relu2` stores `max(out, 0)^2`. Bit-identical to the one-token product of each row. Trusted: the route's tiles name experts below `experts` and slot ranges within `order`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "bf16", len = "slots / used * cols" },
+  { name = "out", kind = "inout", elem = "f32", len = "slots * rows" },
+  { name = "order", kind = "indices", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "tiles", kind = "indices", signed = true, len = "slots * 4", below = "slots + experts + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices", signed = true, len = "1", below = "slots + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "slots >= 1", "slots <= 128", "used >= 1", "slots % used == 0", "slots / used <= 8", "experts >= 1"]
+probes = [
+  { rows = 64, cols = 512, slots = 66, used = 22, relu2 = true, accumulate = false, experts = 5, order = 65, tiles = 4, num_tiles = 1 },
+  { rows = 32, cols = 256, slots = 2, used = 1, relu2 = false, accumulate = true, experts = 2, order = 1, tiles = 1, num_tiles = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_tiles_per_slot"
+cpp = "Iq2xxsGemvTiles"
+returns = "supported"
+doc = "Routed `out[slot] = W[expert] x` for IQ2_XXS experts on BF16 activations over the short route of `ids` (each expert once for all of its slots), one `x` row per slot; stores F32 rows (`accumulate` adds into `out`), `relu2` stores `max(out, 0)^2`. Bit-identical to the one-token product of each row. Trusted: the route's tiles name experts below `experts` and slot ranges within `order`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "bf16", len = "slots * cols" },
+  { name = "out", kind = "inout", elem = "f32", len = "slots * rows" },
+  { name = "order", kind = "indices", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "tiles", kind = "indices", signed = true, len = "slots * 4", below = "slots + experts + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices", signed = true, len = "1", below = "slots + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "true" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "slots >= 1", "slots <= 128", "used >= 1", "slots % used == 0", "slots / used <= 8", "experts >= 1"]
+probes = [
+  { rows = 64, cols = 512, slots = 66, used = 22, relu2 = true, accumulate = false, experts = 5, order = 65, tiles = 4, num_tiles = 1 },
+  { rows = 32, cols = 256, slots = 2, used = 1, relu2 = false, accumulate = true, experts = 2, order = 1, tiles = 1, num_tiles = 1 },
+]
+
+[[launcher]]
+name = "iq2xxs_gemv_tiles_store_bf16"
+cpp = "Iq2xxsGemvTilesStoreBf16"
+returns = "supported"
+doc = "Routed `out[slot] = W[expert] x` for IQ2_XXS experts on BF16 activations over the short route of `ids` (each expert once for all of its slots), one `x` row per token (slot / used); stores BF16 rows, `relu2` stores `max(out, 0)^2`. Bit-identical to the one-token product of each row. Trusted: the route's tiles name experts below `experts` and slot ranges within `order`."
+params = [
+  { name = "ids", kind = "indices", signed = true, len = "slots", below = "experts" },
+  { name = "weights", kind = "in", elem = "bytes", len = "experts * rows * (cols / 256) * 66" },
+  { name = "grid", kind = "in", elem = "u32", len = "1024" },
+  { name = "x", kind = "in", elem = "bf16", len = "slots / used * cols" },
+  { name = "out", kind = "out", elem = "bf16", len = "slots * rows" },
+  { name = "order", kind = "indices", signed = true, len = "slots", below = "slots", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "tiles", kind = "indices", signed = true, len = "slots * 4", below = "slots + experts + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "num_tiles", kind = "indices", signed = true, len = "1", below = "slots + 1", derived_from = "ids", tag = "4294967296 + slots * 2048 + experts" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "used", kind = "scalar", type = "usize" },
+  { name = "slot_rows", kind = "const", cpp_type = "bool", value = "false" },
+  { name = "relu2", kind = "scalar", type = "bool" },
+  { name = "experts", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 32", "rows % 32 == 0", "cols >= 256", "cols % 256 == 0", "slots >= 1", "slots <= 128", "used >= 1", "slots % used == 0", "slots / used <= 8", "experts >= 1"]
+probes = [
+  { rows = 64, cols = 512, slots = 66, used = 22, relu2 = true, experts = 5, order = 65, tiles = 4, num_tiles = 1 },
+  { rows = 32, cols = 256, slots = 2, used = 1, relu2 = false, experts = 2, order = 1, tiles = 1, num_tiles = 1 },
+]
+
+# --- Sampling (sample.hpp) -----------------------------------------------------
+
+[[launcher]]
+name = "logit_heads"
+cpp = "LogitHeads"
+returns = "supported"
+doc = "Summarizes `rows` rows of `vocab` logits: `records[r]` (F64 softmax sum, F32 maximum, i32 count: 16 bytes) and the head's tokens in any order at `candidates[r * 1024]` (u32 token, F32 value). `scratch` is `LogitHeadScratchBytes(rows, vocab)`. Trusted: at most 1024 candidates per row."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "rows * vocab" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize" },
+  { name = "temperature", kind = "scalar", type = "f32" },
+  { name = "keep", kind = "scalar", type = "usize" },
+  { name = "top_p", kind = "scalar", type = "f32" },
+  { name = "minimum", kind = "scalar", type = "usize" },
+  { name = "scratch", kind = "out", elem = "bytes", len = "((rows * ((vocab + 4095) / 4096) * 4) + 255) / 256 * 256 + ((rows * ((vocab + 4095) / 4096) * 8) + 255) / 256 * 256 + ((rows * ((vocab + 4095) / 4096) * 513 * 4) + 255) / 256 * 256 + ((rows * ((vocab + 4095) / 4096) * 513 * 4) + 255) / 256 * 256 + ((rows * 4) + 255) / 256 * 256 + ((rows * 4) + 255) / 256 * 256" },
+  { name = "records", kind = "out", elem = "bytes", len = "rows * 16" },
+  { name = "candidates", kind = "out", elem = "bytes", len = "rows * 1024 * 8" },
+]
+requires = ["rows >= 1", "vocab >= 1", "keep <= 1024", "minimum >= 1"]
+probes = [
+  { rows = 3, vocab = 131072, temperature = 1.0, keep = 40, top_p = 0.95, minimum = 1 },
+  { rows = 1, vocab = 1, temperature = 0.7, keep = 0, top_p = 1.0, minimum = 1 },
+]
+
+# --- LiliCorr drafter (drafter_kernels.hpp) ------------------------------------
+
+[[launcher]]
+name = "to_bf16"
+cpp = "ToBf16"
+returns = "supported"
+doc = "`out = bf16(x)`, round to nearest even."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n" },
+  { name = "out", kind = "out", elem = "bf16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+requires = ["n >= 1"]
+probes = [
+  { n = 1000 },
+  { n = 1 },
+]
+
+[[launcher]]
+name = "gemv_bf16"
+cpp = "GemvBf16"
+returns = "supported"
+doc = "`out[t][r] = sum_c w[r][c] * x[t][c]` for BF16 weights, streaming the weights once."
+params = [
+  { name = "w", kind = "in", elem = "bf16", len = "rows * cols" },
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * cols" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * rows" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1", "n_tokens >= 1", "n_tokens <= 8", "cols % 1024 == 0"]
+probes = [
+  { rows = 4096, cols = 1024, n_tokens = 8 },
+  { rows = 1030, cols = 2048, n_tokens = 3 },
+  { rows = 1, cols = 1024, n_tokens = 1 },
+]
+
+[[launcher]]
+name = "scale_bias"
+cpp = "ScaleBias"
+returns = "supported"
+doc = "`x[r][c] = act(x[r][c] * scale + bias[c])`; `act` 0 none, 1 SiLU; `bias` may be absent."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * cols" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols", optional = true },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "act", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "cols >= 1", "act <= 1"]
+probes = [
+  { scale = 0.5, rows = 3, cols = 700, act = 1, with = ["bias"] },
+  { scale = 1.0, rows = 1, cols = 1, act = 0 },
+]
+
+[[launcher]]
+name = "silu_gate"
+cpp = "SiluGate"
+returns = "supported"
+doc = "`out = silu(gate * gate_scale) * up * up_scale`."
+params = [
+  { name = "gate", kind = "in", elem = "f32", len = "n" },
+  { name = "gate_scale", kind = "scalar", type = "f32" },
+  { name = "up", kind = "in", elem = "f32", len = "n" },
+  { name = "up_scale", kind = "scalar", type = "f32" },
+  { name = "out", kind = "out", elem = "f32", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+requires = ["n >= 1"]
+probes = [
+  { gate_scale = 1.0, up_scale = 1.0, n = 1000 },
+  { gate_scale = 1.0, up_scale = 1.0, n = 1 },
+]
+
+[[launcher]]
+name = "dflash_conv"
+cpp = "DflashConv"
+returns = "supported"
+doc = "DFlash2 dynamic depthwise convolution, causal within each block of `block` tokens; `dynamic` holds `2 * kernel * (hidden / group)` floats per token."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * hidden" },
+  { name = "dynamic", kind = "in", elem = "f32", len = "n_tokens * 2 * kernel * (hidden / group)" },
+  { name = "base", kind = "in", elem = "f32", len = "2 * kernel * hidden" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * hidden" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "block", kind = "scalar", type = "usize" },
+  { name = "hidden", kind = "scalar", type = "usize" },
+  { name = "group", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "side", kind = "scalar", type = "usize" },
+]
+requires = ["n_tokens >= 1", "hidden >= 1", "block >= 1", "group >= 1", "hidden % group == 0", "side <= 1"]
+probes = [
+  { n_tokens = 16, block = 8, hidden = 512, group = 64, kernel = 4, side = 1 },
+  { n_tokens = 1, block = 1, hidden = 1, group = 1, kernel = 1, side = 0 },
+]
+
+[[launcher]]
+name = "rope_neox"
+cpp = "RopeNeox"
+returns = "supported"
+doc = "NeoX rotary embedding in place on `[n_tokens][heads][head_dim]` rows at positions `first[0] + t`."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "n_tokens * heads * head_dim" },
+  { name = "first", kind = "in", elem = "i32", len = "1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "theta", kind = "scalar", type = "f32" },
+]
+requires = ["n_tokens >= 1", "heads >= 1", "head_dim >= 2", "head_dim % 2 == 0"]
+probes = [
+  { n_tokens = 3, heads = 32, head_dim = 128, theta = 10000.0 },
+  { n_tokens = 1, heads = 1, head_dim = 2, theta = 10000.0 },
+]
+
+[[launcher]]
+name = "ring_append"
+cpp = "RingAppend"
+returns = "supported"
+doc = "Stores K and V rows as half in ring slots `(first[0] + t) % ring`; positions stay below `positions` (at most 2^30, so the kernels' int positions cannot overflow)."
+params = [
+  { name = "k", kind = "in", elem = "f32", len = "n_tokens * kv_dim" },
+  { name = "v", kind = "in", elem = "f32", len = "n_tokens * kv_dim" },
+  { name = "k_ring", kind = "inout", elem = "f16", len = "ring * kv_dim" },
+  { name = "v_ring", kind = "inout", elem = "f16", len = "ring * kv_dim" },
+  { name = "first", kind = "indices", signed = true, len = "1", below = "positions - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "kv_dim", kind = "scalar", type = "usize" },
+  { name = "ring", kind = "scalar", type = "usize" },
+  { name = "positions", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "kv_dim >= 1", "ring >= 1", "n_tokens <= positions", "positions <= 1073741824"]
+probes = [
+  { n_tokens = 3, kv_dim = 256, ring = 5, positions = 300 },
+  { n_tokens = 1, kv_dim = 1, ring = 1, positions = 1 },
+]
+
+[[launcher]]
+name = "rows_to_ring"
+cpp = "RowsToRing"
+returns = "supported"
+doc = "`ring[(first[0] + t) % ring_rows] = x[t]` for rows of `width` floats."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n_tokens * width" },
+  { name = "ring", kind = "inout", elem = "f32", len = "ring_rows * width" },
+  { name = "first", kind = "indices", signed = true, len = "1", below = "positions - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "ring_rows", kind = "scalar", type = "usize" },
+  { name = "positions", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "width >= 1", "ring_rows >= 1", "n_tokens <= positions", "positions <= 1073741824"]
+probes = [
+  { n_tokens = 3, width = 300, ring_rows = 4, positions = 300 },
+  { n_tokens = 1, width = 1, ring_rows = 1, positions = 1 },
+]
+
+[[launcher]]
+name = "drafter_attention"
+cpp = "DrafterAttention"
+returns = "supported"
+doc = "Drafter attention for queries at positions `first[0] + t` over ring positions from `max(0, p - window + 1)` to the last query's (non-causal within the block), with per-head sink logits; head_dim 128, 16 query heads per KV head."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "k_ring", kind = "in", elem = "f16", len = "ring * kv_heads * 128" },
+  { name = "v_ring", kind = "in", elem = "f16", len = "ring * kv_heads * 128" },
+  { name = "sinks", kind = "in", elem = "f32", len = "heads" },
+  { name = "out", kind = "out", elem = "f32", len = "n_tokens * heads * 128" },
+  { name = "first", kind = "indices", signed = true, len = "1", below = "positions - n_tokens + 1" },
+  { name = "n_tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "ring", kind = "scalar", type = "usize" },
+  { name = "window", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "positions", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["n_tokens >= 1", "kv_heads >= 1", "heads == kv_heads * 16", "ring >= window + n_tokens", "n_tokens <= positions", "positions <= 1073741824"]
+probes = [
+  { n_tokens = 8, heads = 32, kv_heads = 2, ring = 80, window = 64, scale = 0.088, positions = 300 },
+  { n_tokens = 1, heads = 16, kv_heads = 1, ring = 1, window = 0, scale = 1.0, positions = 1 },
+]
+
+[[launcher]]
+name = "top_k8"
+cpp = "TopK8"
+returns = "supported"
+doc = "Per row the 8 largest logits in descending order (ties: lower id) and the row's log-sum-exp."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "rows * vocab" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "vocab", kind = "scalar", type = "usize" },
+  { name = "ids", kind = "out", elem = "i32", len = "rows * 8" },
+  { name = "values", kind = "out", elem = "f32", len = "rows * 8" },
+  { name = "lse", kind = "out", elem = "f32", len = "rows" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 7, vocab = 131072 },
+  { rows = 1, vocab = 1 },
+]
+
+[[launcher]]
+name = "lilicorr_features"
+cpp = "LiliCorrFeatures"
+returns = "supported"
+doc = "LiliCorr candidate features of `slots` x 8 nodes from `top_k8`, LayerNormed with `w`, `b`; 5 floats per node."
+params = [
+  { name = "values", kind = "in", elem = "f32", len = "slots * 8" },
+  { name = "lse", kind = "in", elem = "f32", len = "slots" },
+  { name = "w", kind = "in", elem = "f32", len = "5" },
+  { name = "b", kind = "in", elem = "f32", len = "5" },
+  { name = "out", kind = "out", elem = "f32", len = "slots * 8 * 5" },
+  { name = "slots", kind = "scalar", type = "usize" },
+]
+requires = ["slots >= 1"]
+probes = [
+  { slots = 7 },
+  { slots = 1 },
+]
+
+[[launcher]]
+name = "lilicorr_combine"
+cpp = "LiliCorrCombine"
+returns = "supported"
+doc = "`x[node] = token[node] + pass[slot] + feature[node] + slot_embd[slot] + rank_embd[rank]`, node = slot * 8 + rank."
+params = [
+  { name = "token", kind = "in", elem = "f32", len = "slots * 8 * width" },
+  { name = "pass", kind = "in", elem = "f32", len = "slots * width" },
+  { name = "feature", kind = "in", elem = "f32", len = "slots * 8 * width" },
+  { name = "slot_embd", kind = "in", elem = "f32", len = "slots * width" },
+  { name = "rank_embd", kind = "in", elem = "f32", len = "8 * width" },
+  { name = "x", kind = "out", elem = "f32", len = "slots * 8 * width" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["slots >= 1", "width >= 1"]
+probes = [
+  { slots = 7, width = 512 },
+  { slots = 1, width = 1 },
+]
+
+[[launcher]]
+name = "node_attention"
+cpp = "NodeAttention"
+returns = "supported"
+doc = "Self-attention over `nodes` rows of q|k|v (3 * heads * 128 floats) with an additive `bias[head][query][key]`."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "nodes * 3 * heads * 128" },
+  { name = "bias", kind = "in", elem = "f32", len = "heads * nodes * nodes" },
+  { name = "out", kind = "out", elem = "f32", len = "nodes * heads * 128" },
+  { name = "nodes", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+requires = ["nodes >= 1", "nodes <= 128", "heads >= 1"]
+probes = [
+  { nodes = 56, heads = 4, scale = 0.088 },
+  { nodes = 128, heads = 1, scale = 1.0 },
+  { nodes = 1, heads = 1, scale = 1.0 },
+]
+
+[[launcher]]
+name = "factor_input"
+cpp = "FactorInput"
+returns = "supported"
+doc = "`out[node] = x[node] | anchor | x[node] * anchor` (3 * width floats)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "nodes * width" },
+  { name = "anchor", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f32", len = "nodes * 3 * width" },
+  { name = "nodes", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["nodes >= 1", "width >= 1"]
+probes = [
+  { nodes = 56, width = 512 },
+  { nodes = 1, width = 1 },
+]
+
+[[launcher]]
+name = "bias_l2_norm"
+cpp = "BiasL2Norm"
+returns = "supported"
+doc = "`x[r] = (x[r] + bias) / max(|x[r] + bias|, eps)`."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 56, width = 512, eps = 1e-12 },
+  { rows = 1, width = 1, eps = 1e-12 },
+]
+
+[[launcher]]
+name = "lattice_scores"
+cpp = "LatticeScores"
+returns = "supported"
+doc = "LiliCorr lattice scores times `scale`: `scores[k] = in[k] . anchor` for the first slot, then `scores[8 + (s - 1) * 64 + prev * 8 + next] = in[s * 8 + next] . out[(s - 1) * 8 + prev]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "slots * 8 * width" },
+  { name = "output", kind = "in", elem = "f32", len = "(slots - 1) * 8 * width" },
+  { name = "anchor", kind = "in", elem = "f32", len = "width" },
+  { name = "scores", kind = "out", elem = "f32", len = "8 + (slots - 1) * 64" },
+  { name = "slots", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+requires = ["slots >= 1", "width >= 1"]
+probes = [
+  { slots = 7, width = 512, scale = 0.5 },
+  { slots = 1, width = 1, scale = 1.0 },
+]
+
+# --- Vision encoder (vision.hpp) -----------------------------------------------
+
+[[launcher]]
+name = "vision_to_operand"
+cpp = "VisionToOperand"
+returns = "supported"
+doc = "`out[i] = in[i]` in the operand format (`op` 0 BF16, 1 FP16)."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "n" },
+  { name = "out", kind = "out", elem = "f16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { n = 1000, op = 0 },
+  { n = 0, op = 1 },
+]
+
+[[launcher]]
+name = "vision_bf16_to_operand"
+cpp = "VisionBf16ToOperand"
+returns = "supported"
+doc = "BF16 values in the operand format: a copy for BF16."
+params = [
+  { name = "input", kind = "in", elem = "bf16", len = "n" },
+  { name = "out", kind = "out", elem = "f16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { n = 1000, op = 1 },
+  { n = 3, op = 0 },
+]
+
+[[launcher]]
+name = "vision_embed"
+cpp = "VisionEmbed"
+returns = "supported"
+doc = "The ViT's input rows: rows below `prefix_tokens` become the prefix tokens; patch row `prefix_tokens + p` gains its position, bilinearly resized from the `side` x `side` table."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "(prefix_tokens + grid_rows * grid_cols) * width" },
+  { name = "prefix", kind = "in", elem = "f32", len = "prefix_tokens * width" },
+  { name = "positions", kind = "in", elem = "f32", len = "side * side * width" },
+  { name = "prefix_tokens", kind = "scalar", type = "usize" },
+  { name = "grid_rows", kind = "scalar", type = "usize" },
+  { name = "grid_cols", kind = "scalar", type = "usize" },
+  { name = "side", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["side >= 1", "prefix_tokens + grid_rows * grid_cols >= 1"]
+probes = [
+  { prefix_tokens = 10, grid_rows = 6, grid_cols = 9, side = 8, width = 160 },
+  { prefix_tokens = 1, grid_rows = 0, grid_cols = 0, side = 1, width = 1 },
+]
+
+[[launcher]]
+name = "vision_layer_norm"
+cpp = "VisionLayerNorm"
+returns = "supported"
+doc = "LayerNorm of `rows` rows of `width` with affine `w`, `b`, into the operand format."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "w", kind = "in", elem = "f32", len = "width" },
+  { name = "b", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["rows >= 1", "op <= 1"]
+probes = [
+  { rows = 5, width = 1280, eps = 1e-06, op = 0 },
+  { rows = 1, width = 1, eps = 1e-06, op = 1 },
+]
+
+[[launcher]]
+name = "vision_bias"
+cpp = "VisionBias"
+returns = "supported"
+doc = "`out = y + bias` in the operand format."
+params = [
+  { name = "y", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "out", kind = "out", elem = "f16", len = "rows * cols" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { rows = 5, cols = 1280, op = 1 },
+  { rows = 0, cols = 1, op = 0 },
+]
+
+[[launcher]]
+name = "vision_bias_gelu"
+cpp = "VisionBiasGelu"
+returns = "supported"
+doc = "`out = gelu(y + bias)` with the exact GELU, in the operand format."
+params = [
+  { name = "y", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "out", kind = "out", elem = "f16", len = "rows * cols" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { rows = 5, cols = 1280, op = 1 },
+  { rows = 0, cols = 1, op = 0 },
+]
+
+[[launcher]]
+name = "vision_residual"
+cpp = "VisionResidual"
+returns = "supported"
+doc = "`x += y + bias`; `rows` rows of `cols`."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * cols" },
+  { name = "y", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "cols", kind = "scalar", type = "usize" },
+]
+probes = [
+  { rows = 5, cols = 1280 },
+  { rows = 0, cols = 1 },
+]
+
+[[launcher]]
+name = "vision_attention"
+cpp = "VisionAttention"
+returns = "supported"
+doc = "Bidirectional multi-head attention of `tokens` rows of qkv (q | k | v of heads x 80) into `out` (heads x 80 per row), flash attention on the matrix units."
+params = [
+  { name = "qkv", kind = "in", elem = "f16", len = "tokens * 3 * heads * 80" },
+  { name = "out", kind = "out", elem = "f16", len = "tokens * heads * 80" },
+  { name = "tokens", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["heads >= 1", "op <= 1"]
+probes = [
+  { tokens = 70, heads = 16, scale = 0.11, op = 0 },
+  { tokens = 1, heads = 1, scale = 1.0, op = 1 },
+]
+
+[[launcher]]
+name = "vision_merge_norm"
+cpp = "VisionMergeNorm"
+returns = "supported"
+doc = "The projector's input: patch features merged 2x2 into rows of `4 * width` over the halved grid, RMS-normalized and scaled by `w`, in the operand format."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "(prefix_tokens + grid_rows * grid_cols) * width" },
+  { name = "w", kind = "in", elem = "f32", len = "4 * width" },
+  { name = "out", kind = "out", elem = "f16", len = "(grid_rows / 2) * (grid_cols / 2) * 4 * width" },
+  { name = "prefix_tokens", kind = "scalar", type = "usize" },
+  { name = "grid_rows", kind = "scalar", type = "usize" },
+  { name = "grid_cols", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "eps", kind = "scalar", type = "f32" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { prefix_tokens = 10, grid_rows = 6, grid_cols = 9, width = 160, eps = 1e-06, op = 0 },
+  { prefix_tokens = 0, grid_rows = 2, grid_cols = 2, width = 1, eps = 1e-06, op = 1 },
+]
+
+[[launcher]]
+name = "vision_relu2"
+cpp = "VisionRelu2"
+returns = "supported"
+doc = "`out = max(y, 0)^2` in the operand format."
+params = [
+  { name = "y", kind = "in", elem = "f32", len = "n" },
+  { name = "out", kind = "out", elem = "f16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "op", kind = "scalar", type = "u32" },
+]
+requires = ["op <= 1"]
+probes = [
+  { n = 1000, op = 0 },
+  { n = 0, op = 1 },
+]
+
+# --- Quantized tier (mmq/nb_mmq.h) ------------------------------------------
+# Scratch comes from the tier's arena per stream (256 MiB, reserved by
+# `mmq_bind_stream` or on first use). Weights hold `m` rows of `k` values;
+# `k` is a multiple of 256, so the products read whole k-iterations only.
+
+[[launcher]]
+name = "mmq_bind_stream"
+cpp = "MmqBindStream"
+returns = "supported"
+doc = "Reserves the tier's scratch arena of the stream before its first product, so that the first product may be recorded by stream capture."
+params = [
+]
+probes = [
+  {  },
+]
+
+[[launcher]]
+name = "mmq_release_stream"
+cpp = "MmqReleaseStream"
+returns = "void"
+doc = "Frees the tier's scratch arena of the stream after its queued work; the stream is about to be destroyed."
+params = [
+]
+probes = [
+  {  },
+]
+
+[[launcher]]
+name = "mmq_dense_q8_0"
+cpp = "MmqDenseQ8_0"
+returns = "supported"
+doc = "`out[col][row] = sum_k W[row][k] * x[col][k]` for Q8_0 weights: vector kernels for up to 8 columns, tiles for more."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 32) * 34" },
+  { name = "x", kind = "in", elem = "f32", len = "n * k" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { m = 96, n = 3, k = 512 },
+  { m = 130, n = 40, k = 256 },
+  { m = 1, n = 1, k = 256 },
+]
+
+[[launcher]]
+name = "mmq_dense_iq2_xxs"
+cpp = "MmqDenseIq2Xxs"
+returns = "supported"
+doc = "`out[col][row] = sum_k W[row][k] * x[col][k]` for IQ2_XXS weights: vector kernels for up to 8 columns, tiles for more."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 256) * 66" },
+  { name = "x", kind = "in", elem = "f32", len = "n * k" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { m = 96, n = 3, k = 512 },
+  { m = 130, n = 40, k = 256 },
+  { m = 1, n = 1, k = 256 },
+]
+
+[[launcher]]
+name = "mmq_dense_nvfp4"
+cpp = "MmqDenseNvfp4"
+returns = "supported"
+doc = "`out[col][row] = sum_k W[row][k] * x[col][k]` for NVFP4 weights: vector kernels for up to 8 columns, tiles for more."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 64) * 36" },
+  { name = "x", kind = "in", elem = "f32", len = "n * k" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "k >= 256", "k % 256 == 0"]
+probes = [
+  { m = 96, n = 3, k = 512 },
+  { m = 130, n = 40, k = 256 },
+  { m = 1, n = 1, k = 256 },
+]
+
+[[launcher]]
+name = "mmq_dense_q8_1_q8_0"
+cpp = "MmqDenseQ8_1Q8_0"
+returns = "supported"
+doc = "`mmq_dense_q8_0` for up to 8 columns on Q8_1 rows the caller already quantized."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n * (k / 32) * 36" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "n <= 8", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, n = 8, k = 1024 },
+  { m = 1, n = 1, k = 512 },
+]
+
+[[launcher]]
+name = "mmq_dense_q8_1_iq2_xxs"
+cpp = "MmqDenseQ8_1Iq2Xxs"
+returns = "supported"
+doc = "`mmq_dense_iq2_xxs` for up to 8 columns on Q8_1 rows the caller already quantized."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n * (k / 32) * 36" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "n <= 8", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, n = 8, k = 1024 },
+  { m = 1, n = 1, k = 512 },
+]
+
+[[launcher]]
+name = "mmq_dense_q8_1_nvfp4"
+cpp = "MmqDenseQ8_1Nvfp4"
+returns = "supported"
+doc = "`mmq_dense_nvfp4` for up to 8 columns on Q8_1 rows the caller already quantized."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 64) * 36" },
+  { name = "xq", kind = "in", elem = "bytes", len = "n * (k / 32) * 36" },
+  { name = "out", kind = "out", elem = "f32", len = "n * m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "n", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "n >= 1", "n <= 8", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, n = 8, k = 1024 },
+  { m = 1, n = 1, k = 512 },
+]
+
+[[launcher]]
+name = "mmq_residual_q8_0"
+cpp = "MmqResidualQ8_0"
+returns = "supported"
+doc = "One column: `out = scale * W xq + out` for Q8_0 weights, the scale and the residual fused into the product."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 32) * 34" },
+  { name = "xq", kind = "in", elem = "bytes", len = "(k / 32) * 36" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "out", kind = "inout", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, k = 1024, scale = 0.5 },
+  { m = 1, k = 512, scale = 1.0 },
+]
+
+[[launcher]]
+name = "mmq_residual_iq2_xxs"
+cpp = "MmqResidualIq2Xxs"
+returns = "supported"
+doc = "One column: `out = scale * W xq + out` for IQ2_XXS weights, the scale and the residual fused into the product."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 256) * 66" },
+  { name = "xq", kind = "in", elem = "bytes", len = "(k / 32) * 36" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "out", kind = "inout", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, k = 1024, scale = 0.5 },
+  { m = 1, k = 512, scale = 1.0 },
+]
+
+[[launcher]]
+name = "mmq_residual_nvfp4"
+cpp = "MmqResidualNvfp4"
+returns = "supported"
+doc = "One column: `out = scale * W xq + out` for NVFP4 weights, the scale and the residual fused into the product."
+params = [
+  { name = "w", kind = "in", elem = "bytes", len = "m * (k / 64) * 36" },
+  { name = "xq", kind = "in", elem = "bytes", len = "(k / 32) * 36" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "out", kind = "inout", elem = "f32", len = "m" },
+  { name = "m", kind = "scalar", type = "usize" },
+  { name = "k", kind = "scalar", type = "usize" },
+]
+requires = ["m >= 1", "k >= 512", "k % 512 == 0"]
+probes = [
+  { m = 96, k = 1024, scale = 0.5 },
+  { m = 1, k = 512, scale = 1.0 },
+]

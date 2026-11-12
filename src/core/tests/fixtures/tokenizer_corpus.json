@@ -1,0 +1,35 @@
+[
+ "Hello, world! I'm here; you're there. We'll see—they'd've known.",
+ "DON'T SHOUT'S 'Tis ſ'S 'LL 'Ve 'RE 'M 'D",
+ "In 2026, π≈3.14159; ½ ² ³ ① ⅷ 〇 ١٢٣ १२३ ১২৩ ７８９",
+ "a  b   c\t\td\n\ne\r\n\r\nf    \n  g   ",
+ "東京タワーは高さ333メートルです。北京欢迎你！한국어 텍스트도 있습니다.",
+ "Family: 👨‍👩‍👧‍👦, flags 🇩🇪🇺🇸, skin 👍🏽, keycap 1️⃣",
+ "Café naïve Å ệ 각 Ǻ",
+ "مرحبا بالعالم، كيف حالك؟ שלום עולם",
+ "नमस्ते दुनिया। क्षत्रिय ਸਤ ਸ੍ਰੀ ਅਕਾਲ தமிழ்",
+ "สวัสดีครับ ภาษาไทยไม่มีช่องว่าง",
+ "fn main() {\n    let x = vec![1, 2, 3];\n    println!(\"{x:?}\");\n}\n",
+ "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nOK<|im_end|>",
+ "Wait... what?!?! --- *** ### $$$ (((nested))) [x] {y} <z>",
+ "Grüße aus Köln – Straße, Maß, Œuvre, façade, garçon, cœur",
+ "Version v2.0.1-beta+exp.sha.5114f85 at 10:45pm (UTC+02:00)",
+ "    indented\n\t\ttabs\n   \n",
+ "https://example.com/path?q=1&r=two#frag mail@example.org",
+ "Привет, мир! Ёжик Γειά σου Κόσμε ΣΊΣΥΦΟΣ Բարեւ",
+ "ｆｕｌｌｗｉｄｔｈ ＡＢＣ ℌ ℡ ﬁ ﬀ",
+ "∑ ∫ √ ∞ ≠ ≤ ≥ → ⇒ € £ ¥ © ® ™ § ¶ †",
+ "a​b c d　e﻿f    x yz",
+ "It’s ’s 's ''s '",
+ " ",
+ "\n",
+ "'",
+ "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa !!!!!!!!!!!!!!!!!!!!",
+ "!́x ?̈ 5́ ́́start",
+ "abc123def 4th 1st 007 1,000,000.50",
+ "x \n y x\n \ny \r\n \t\n\t",
+ "󰀀 ͸ 🯰 ⿿",
+ "Mixed<|endoftext|>tokens<|im_start|><|im_end|>tail",
+ "  leading and trailing spaces  ",
+ "ᾀ ᾆ ẛ̣ Å Ω Å"
+]

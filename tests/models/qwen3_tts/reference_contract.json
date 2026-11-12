@@ -1,0 +1,70 @@
+{
+  "schema": "gufo.qwen3-tts-reference-contract.v1",
+  "reference_commit": "022e286b98fbec7e1e916cb940cdf532cd9f488e",
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+  "speaker": "vivian",
+  "language": "english",
+  "text": "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, “and what is the use of a book,” thought Alice “without pictures or conversations?”",
+  "greedy": {
+    "device": "cpu",
+    "max_new_tokens": 6,
+    "sample_rate": 24000,
+    "samples": 9600,
+    "code_steps": 5,
+    "code_groups": 16,
+    "talker_codes_sha256": "c387a06ded528b343f7f6e5c5739e465ee0e4e64dd35b613e4adc1b227f47a44",
+    "waveform_sha256": "0155d52a3b2bb0e8495dc4b2a0de6815893b24ac9974ed9f37336f07c61f04b7",
+    "first_codes": [
+      [1995, 1159, 355, 22, 1174, 1093],
+      [765, 102, 1977, 1531, 450, 2047],
+      [160, 1577, 33, 201, 394, 82],
+      [1056, 286, 1503, 1426, 64, 492],
+      [1922, 271, 1872, 1532, 1151, 729]
+    ]
+  },
+  "rocm_greedy": {
+    "device": "cuda:0",
+    "max_new_tokens": 6,
+    "sample_rate": 24000,
+    "samples": 9600,
+    "code_steps": 5,
+    "code_groups": 16,
+    "talker_codes_sha256": "2047da3ed284436d8cc446aa2694e0917b630c181a06562001e93e045ce0dffa",
+    "waveform_sha256": "9d4063b7617b744241139b809fc1321330ecccd11a99dba32abdb022a4424a81",
+    "first_codes": [
+      [1995, 1159, 355, 22, 1174, 1093],
+      [765, 102, 1977, 1531, 450, 2047],
+      [160, 1577, 33, 639, 281, 82],
+      [1056, 286, 1503, 1473, 48, 724],
+      [1922, 633, 603, 1146, 926, 387]
+    ]
+  },
+  "rocm_sampled": {
+    "device": "cuda:0",
+    "max_new_tokens": 2048,
+    "sample_rate": 24000,
+    "samples": 572160,
+    "code_steps": 298,
+    "code_groups": 16,
+    "talker_codes_sha256": "d1c2f2a620b9733f1b267942a76201ddce97247120ca1ceff0b011cd338802ca",
+    "waveform_sha256": "3b06ad3a081dcc9b373ae4c1c17302ed41c092929dd1720529a2ce5ecd74abb6",
+    "first_codes": [
+      [1995, 1159, 355, 22, 1174, 1093],
+      [765, 890, 431, 486, 1480, 1361],
+      [1311, 407, 237, 1259, 494, 1914],
+      [1311, 862, 592, 1588, 179, 135],
+      [748, 1971, 2046, 1747, 1926, 1218]
+    ]
+  },
+  "prefill": {
+    "tokens": 78,
+    "hidden_size": 2048,
+    "logits": 3072,
+    "inputs_embeds_sha256": "e2f8a1442ae05dc38b3aa9ab82a69f7427be05fecf69bd2e8e329887425e3f44",
+    "layer0_output_sha256": "f906df32850059d650078d1b51f7695e88c41b42abc8612d98eca6c079804110",
+    "layer27_output_sha256": "c4db2b6680428f0cbf7c24ae5e164a73a3100a157df87709584b2ba4a975b72a",
+    "logits_sha256": "f08b2e521ce4b963c92d692c8ebd7c6e4a59257381828a4abc8f8be403b2f760",
+    "predictor_codes_sha256": "29927ac66ff657446c2966985600660520789b359e514c84365fa719fb5e620c",
+    "predictor_logits_sha256": "99697c5fb2ca6a311a64c3d1837cb1c8d0daef45c2fae99ce73337511d936d68"
+  }
+}

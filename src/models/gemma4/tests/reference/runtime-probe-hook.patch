@@ -1,0 +1,28 @@
+diff --git a/extension.cmake b/extension.cmake
+index 8848809..40e0153 100644
+--- a/extension.cmake
++++ b/extension.cmake
+@@ -281,6 +281,9 @@ _gemma4_tool(gemma4_vision_generate_probe
+ _gemma4_tool(gemma4_gpu_probe
+   SOURCES tests/gpu_probe.cpp
+   LINK_LIBRARIES gufo_gemma4_hip gufo_gemma4 gufo_ext_hip)
++_gemma4_tool(gemma4_runtime_probe
++  SOURCES tests/runtime_probe.cpp
++  LINK_LIBRARIES gufo_gemma4_hip gufo_gemma4 gufo_ext_hip)
+ 
+ install(FILES "${GUFO_EXTENSION_BUILD_ROOT}/LICENSE"
+   DESTINATION share/licenses/gufo/extensions/gemma4)
+diff --git a/extension.json b/extension.json
+index 7f898ed..b70cc0c 100644
+--- a/extension.json
++++ b/extension.json
+@@ -87,7 +87,8 @@
+     "gemma4_reference_probe":         {"requires": ["testing"], "role": "test"},
+     "gemma4_vision_probe":            {"requires": ["testing"], "role": "test"},
+     "gemma4_vision_generate_probe":   {"requires": ["hip", "testing"], "role": "test"},
+-    "gemma4_gpu_probe":               {"requires": ["hip", "testing"], "role": "test"}
++    "gemma4_gpu_probe":               {"requires": ["hip", "testing"], "role": "test"},
++    "gemma4_runtime_probe":           {"requires": ["hip", "testing"], "role": "test"}
+   },
+   "licenses": ["LICENSE", "LICENSES/gufo.txt"]
+ }

@@ -1,0 +1,54 @@
+# Hidden files and directories stay out of the repository, so local tools and
+# temporary dot-folders need no entry. Those that belong in it are exceptions.
+.*
+!/.gitignore
+!/.containerignore
+!/.clang-format
+!/.clang-tidy
+!/.cargo/
+!/.agents/
+!/.claude/
+/.claude/*
+!/.claude/skills
+
+# Build output: Cargo, and C++ reference programs built with CMake or by hand
+/target/
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.d
+*.a
+*.so
+*.so.*
+
+# Rust tooling: rustfmt backups, cargo-mutants output, rustc ICE dumps
+**/*.rs.bk
+**/mutants.out*/
+rustc-ice-*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Model files, profiles, logit dumps and teacher captures never belong in
+# source control. The paths are anchored at the root so that fixture paths of
+# the same name stay trackable.
+/artifacts/
+/models/
+*.safetensors
+*.gguf
+*.ckpt
+pytorch_model*.bin
+
+# Test fixtures stay trackable whatever their suffix.
+!fixtures/
+!fixtures/**

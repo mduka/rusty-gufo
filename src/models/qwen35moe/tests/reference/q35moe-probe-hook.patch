@@ -1,0 +1,25 @@
+diff --git a/extension.cmake b/extension.cmake
+index 6d571e7..5b8b5eb 100644
+--- a/extension.cmake
++++ b/extension.cmake
+@@ -212,3 +212,6 @@ gufo_extension_hip_sources(strycast_q35_hip
+ 
+ install(FILES "${GUFO_EXTENSION_BUILD_ROOT}/LICENSE"
+   DESTINATION share/licenses/gufo/extensions/strycast_qwen35moe)
++
++# rusty-gufo's C++ reference probe (tests/q35moe_probe.cmake).
++include("${GUFO_EXTENSION_BUILD_ROOT}/tests/q35moe_probe.cmake" OPTIONAL)
+diff --git a/extension.json b/extension.json
+index b54ecfb..7b9f22e 100644
+--- a/extension.json
++++ b/extension.json
+@@ -60,7 +60,8 @@
+     "strycast_q35_family": {"requires": []},
+     "strycast_q35": {"requires": []},
+     "strycast_q35_kernels": {"requires": ["hip"]},
+-    "strycast_q35_hip": {"requires": ["hip"]}
++    "strycast_q35_hip": {"requires": ["hip"]},
++    "q35moe_probe": {"requires": ["hip", "testing"], "role": "test"}
+   },
+   "licenses": [
+     "LICENSE"

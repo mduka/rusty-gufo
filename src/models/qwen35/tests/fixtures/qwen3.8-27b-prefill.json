@@ -1,0 +1,51 @@
+{
+ "source": "src/models/qwen35/tests/reference/cpp_decode_dump.cpp prefill|generate against the C++ baseline (gufo-org/gufo v0.27.0, ROCm 10.1), Qwen3.8-27B-UD-Q4_K_XL.gguf, max_context 6144",
+ "prompt": "head + body + tail; body[i] = 1000 + (7919 i + 13) % 50000",
+ "head": [248045, 846, 198],
+ "tail": [248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+ "max_context": 6144,
+ "prefill": [
+  {
+   "body": 7,
+   "prompt_len": 19,
+   "ids": [2064, 5686, 1040, 488, 2908, 3766, 264, 1103, 314],
+   "logits_fnv1a64": ["e82e88e6d50f32bf", "c190ac6a017a7d74", "5f345e39e2d4197d", "0c1299baa8dc5efa", "f39f4792b293e02f", "a22ed5cf89a76219", "36db68ae5897483b", "f4ab65bdd22cf214", "16fdbcf81b355e29"]
+  },
+  {
+   "body": 100,
+   "prompt_len": 112,
+   "ids": [760, 1414, 488, 3766, 7701, 310, 381, 264, 2972],
+   "logits_fnv1a64": ["dc2c1396724ee3ea", "753562a6b708ae7b", "a3c0bcf97d58ee5b", "d9edabb6bdcef3b1", "4f6c1a1f0d764198", "a20173ec8ab454fc", "4483b3308ca30e3f", "bad81ccc9ad29821", "c34dc05cb3adcd74"]
+  },
+  {
+   "body": 341,
+   "prompt_len": 353,
+   "ids": [760, 1414, 488, 3766, 7701, 310, 381, 264, 2972],
+   "logits_fnv1a64": ["ae67c804cf51db1c", "b589e6d91c2d66fe", "e8dff016d1b0ebac", "a3c21efc6ed8da51", "0087dd5ec35df040", "3d52c18346cc1b6f", "ef8261332bb5be59", "cae1062c49391c01", "d5229e53931fb73d"]
+  },
+  {
+   "body": 1129,
+   "prompt_len": 1141,
+   "ids": [760, 1414, 488, 3766, 7701, 310, 381, 264, 2972],
+   "logits_fnv1a64": ["999241f4217cd282", "5f5f7840c51e4e98", "ec3d8c1e7df8284a", "bd861ef2aea74bb2", "0dceee6392f0f1f1", "a910fc824591fb15", "d6e517cb211fae50", "c665fb43c1fcb0af", "e37c0faa03b9102c"]
+  },
+  {
+   "body": 5077,
+   "prompt_len": 5089,
+   "ids": [760, 1414, 3766, 7701, 310, 381, 264, 4281, 314],
+   "logits_fnv1a64": ["ca4a22ee6e3c9085", "d12b06625ba09aa4", "26dc9fbc3056b9a0", "f31c642990ce2480", "134e9596625dc344", "664a773b1eb9ce2a", "c4855450dc940535", "4223fe7411aa1463", "f448d939362812ca"]
+  }
+ ],
+ "generate": [
+  {
+   "body": 7,
+   "max_new_tokens": 24,
+   "ids": [2064, 5686, 1040, 488, 2908, 3766, 264, 1103, 314, 2250, 43697, 3665, 25, 271, 16, 13, 2972, 32332, 332, 1317, 43792, 18675, 310, 13595]
+  },
+  {
+   "body": 1129,
+   "max_new_tokens": 24,
+   "ids": [760, 1414, 488, 3766, 7701, 310, 381, 264, 2972, 5816, 82987, 466, 7132, 36412, 886, 93868, 4222, 12571, 494, 25, 271, 12, 2972, 1008]
+  }
+ ]
+}

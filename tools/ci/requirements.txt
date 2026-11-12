@@ -1,0 +1,2 @@
+# The C++ formatter of tools/ci/check-format.py, in hosted CI and the gate.
+clang-format==21.1.8

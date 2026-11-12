@@ -1,0 +1,37 @@
+diff --git a/q35/family/vision/encoder.hip b/q35/family/vision/encoder.hip
+index 6b6c89b..83faa9e 100644
+--- a/q35/family/vision/encoder.hip
++++ b/q35/family/vision/encoder.hip
+@@ -392,7 +392,7 @@ struct Encoder::Impl {
+     expect("clip.vision.attention.head_count", kHeads);
+     expect("clip.vision.spatial_merge_size", 2);
+     expect("clip.vision.image_size", 768);
+-    if ((width != 5120 && width != 3072 && width != 2560) ||
++    if ((width != 5120 && width != 3072 && width != 2560 && width != 2048) ||
+         reader->GetMetadataString("general.architecture") != "clip" ||
+         reader->GetMetadataString("general.type") != "mmproj" ||
+         reader->GetMetadataBool("clip.has_vision_encoder") != true ||
+diff --git a/q35/model/drivers.cpp b/q35/model/drivers.cpp
+index f7c6870..c50ed24 100644
+--- a/q35/model/drivers.cpp
++++ b/q35/model/drivers.cpp
+@@ -277,6 +277,7 @@ std::shared_ptr<models::qwen::vision::Encoder> LoadQwenVision(
+   const std::uint32_t width =
+       reader.GetMetadataUint64("qwen35.embedding_length") == 5120      ? 5120
+       : reader.GetMetadataUint64("qwen35moe.embedding_length") == 3072 ? 3072
++      : reader.GetMetadataUint64("qwen35moe.embedding_length") == 2048 ? 2048
+                                                                        : 0;
+   if (width == 0) {
+     throw std::invalid_argument(
+diff --git a/q35/model/runner.cpp b/q35/model/runner.cpp
+index 91d84f1..b1a3d7e 100644
+--- a/q35/model/runner.cpp
++++ b/q35/model/runner.cpp
+@@ -1228,6 +1228,7 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenTextRunner(
+     const std::uint32_t width =
+         reader->GetMetadataUint64("qwen35.embedding_length") == 5120      ? 5120
+         : reader->GetMetadataUint64("qwen35moe.embedding_length") == 3072 ? 3072
++        : reader->GetMetadataUint64("qwen35moe.embedding_length") == 2048 ? 2048
+                                                                           : 0;
+     if (width != 0) {
+       vision = models::qwen::vision::Encoder::Open(
