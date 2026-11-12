@@ -402,7 +402,13 @@
   "_ZN4gufo3hip12_GLOBAL__N_121HalfPrefillGemmKernelILi256ELi256ELi8ELi4ELNS_4core8GgmlTypeE12ELNS1_12HalfEpilogueE2ELb0ELS4_23EEEvPKvPKsPfiiiPKfS7_": {
    "max_scratch": 16
   },
-  "_ZN4gufo3hip19WmmaCausalAttentionILj32ELj16ELb0EEEvPKfS3_PK6__halfS6_PfjmS7_jj": {
+  "_ZN4gufo3hip19WmmaCausalAttentionILj16ELj4ELj32ELj16ELb0EEEvPKfS3_PK6__halfS6_PfjmS7_jj": {
+   "max_scratch": 16
+  },
+  "_ZN4gufo3hip19WmmaCausalAttentionILj24ELj4ELj32ELj16ELb0EEEvPKfS3_PK6__halfS6_PfjmS7_jj": {
+   "max_scratch": 16
+  },
+  "_ZN4gufo3hip19WmmaCausalAttentionILj8ELj2ELj32ELj16ELb0EEEvPKfS3_PK6__halfS6_PfjmS7_jj": {
    "max_scratch": 16
   },
   "_ZN4gufo3hip33BatchedExactBf16GEMMFp32VecKernelILj16ELm24ELm2ELb1ELj64ELm1ELb0EEEvPK12hip_bfloat16PKfPfmm": {

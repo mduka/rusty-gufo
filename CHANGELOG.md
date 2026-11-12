@@ -3,6 +3,13 @@
 Notable user-facing changes are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+* The dense Qwen3.5 models prefill their attention on the matrix cores (the
+  Qwen3.8 27B's WMMA kernel): long prompts many times faster; logits no
+  longer bit-identical to Gufo's, the same tokens on the checked prompts but
+  for one near tie.
+
 ## 0.1.0 (2026-11-12)
 
 The first release: an AI engine in Rust for AMD Strix Halo (`gfx1151`) on a

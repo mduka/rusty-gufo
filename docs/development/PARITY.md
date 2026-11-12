@@ -54,7 +54,7 @@ Against Gufo v0.28.1, for users and contributors alike. Everything not listed be
 | `serve llm --trace` (request and reply content to a JSONL file) | Not ported, by decision: it writes client content to disk. |
 | `prompt`/`chat --cpu` (CPU fallback) | Not ported: without a device, loading fails. |
 | `bench --enable-yarn` | Not ported: `gufo bench` measures the native context; `serve llm --enable-yarn` exists. |
-| Dense Qwen with F32 or Q8_K projections, or with other head and state shapes (Gufo's hipBLAS/hipBLASLt projection routes, unfused QK-norm/RoPE and plain recurrence) | Not ported: no published checkpoint needs them, and loading refuses such files. Both sides refuse F16 projections. |
+| Dense Qwen with F32 or Q8_K projections, or with other head and state shapes (Gufo's hipBLAS/hipBLASLt projection routes, unfused QK-norm/RoPE, baseline prefill attention and plain recurrence) | Not ported: no published checkpoint needs them, and loading refuses such files. Both sides refuse F16 projections. |
 | The DeepSeek V4 Flash profiling and trace hooks (`GUFO_DEEPSEEK_ROCM_*_PROFILE`, `GUFO_DEEPSEEK_DSPARK_TRACE`, `_WIDTH_TRACE`, `_TIMING`) | Not ported: diagnostics only; `tools/prof/prof.py` profiles the Rust binary. |
 | `tune_hipblaslt` and its plan database (`GUFO_HIPBLASLT_PLAN_CACHE`), `gufo-kernel-bench` | Not ported: tools outside `gufo`. Plans are chosen per shape at run time, as Gufo does without a database. |
 | Windows support (Gufo's `src/core/platform` layer, Windows builds and their workflows, Gufo #775, Gufo #805, Gufo #872) | Not ported: Rust uses the standard library and `gufo-hip`, not Gufo's platform layer. |
@@ -86,6 +86,7 @@ Against Gufo v0.28.1, for users and contributors alike. Everything not listed be
 | Structured-output vocabulary at startup | A build failure does not stop the server; the first constrained request builds it again and reports the error. Gufo fails startup. |
 | DeepSeek V4 Flash startup lines | Written to stderr directly, so `--log-level` does not filter them. |
 | Load and image-cache diagnostics | No `phase=artifact_identity` load line and no `event=image_cache` debug line. |
+| Dense Qwen3.5 prefill attention (16/4 and 8/2 heads) | The WMMA attention of the Qwen3.8 27B, instantiated for these head counts, at any prompt length; Gufo runs `LaunchBatchedAttention`, which holds a row's scores in LDS up to 16,128 positions. The logits differ in the last bits (FP16 queries and probabilities); the checked prompts give Gufo's tokens but for one near tie of the two best logits ([Qwen3.5 checks](models/qwen3.5/CHECKS.md)). Long prompts prefill many times faster. |
 
 ### Only in rusty-gufo
 

@@ -63,10 +63,16 @@ fn copy_kv_rows(
 /// Largest head dimension of the fused QK-norm/RoPE/KV kernel.
 const FUSED_QK_NORM_MAX_HEAD_DIM: u32 = 256;
 
+/// Query and KV heads of 256 elements the WMMA prefill attention is
+/// instantiated for (`IsWmmaAttentionHeadShape`): the Qwen3.8 27B, the
+/// Qwen3.5 4B and 9B, the Qwen3.5 0.8B and 2B.
+const PREFILL_ATTENTION_SHAPES: [(u32, u32); 3] = [(24, 4), (16, 4), (8, 2)];
+
 /// The shapes the Rust kernels and routes take: heads up to the fused
-/// QK-norm kernel's width in whole groups per KV head, and the row-split
-/// DeltaNet's 128 x 128 state. The C++ fallbacks for other shapes (unfused
-/// QK-norm and RoPE, the plain recurrence) are not ported; no published
+/// QK-norm kernel's width in whole groups per KV head, a head shape of the
+/// WMMA prefill attention, and the row-split DeltaNet's 128 x 128 state. The
+/// C++ fallbacks for other shapes (unfused QK-norm and RoPE, the baseline
+/// prefill attention, the plain recurrence) are not ported; no published
 /// Qwen3.5 checkpoint needs them.
 pub fn shape_supported(c: &ModelConfig) -> Result<(), String> {
     if c.head_dim > FUSED_QK_NORM_MAX_HEAD_DIM {
@@ -77,6 +83,14 @@ pub fn shape_supported(c: &ModelConfig) -> Result<(), String> {
     }
     if c.num_key_value_heads == 0 || !c.num_attention_heads.is_multiple_of(c.num_key_value_heads) {
         return Err("the query heads must form whole groups per KV head".into());
+    }
+    if c.head_dim != 256
+        || !PREFILL_ATTENTION_SHAPES.contains(&(c.num_attention_heads, c.num_key_value_heads))
+    {
+        return Err(format!(
+            "the prefill attention takes 24/4, 16/4 or 8/2 heads of 256, not {}/{} of {}",
+            c.num_attention_heads, c.num_key_value_heads, c.head_dim
+        ));
     }
     if !crate::routes::deltanet_row_split_supported(c.ssm_state_size, c.ssm_value_size()) {
         return Err("the Rust Qwen recurrence needs a 128 x 128 DeltaNet state".into());

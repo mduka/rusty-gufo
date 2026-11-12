@@ -76,23 +76,6 @@ void LaunchFusedQKNormRoPEKvWrite(
     hipStream_t stream = nullptr,
     const models::qwen::vision::DeviceRope* rope = nullptr);
 
-/// Batched Causal Attention for B tokens with KV Cache. When skip_kv_write is
-/// true the KV cache is assumed already written by the fused prefill kernel
-/// (opt-c010-qk-rope-kv). When out_context_bf16 is non-null the context is also
-/// written as BF16, which saves the caller a conversion launch when the next
-/// projection consumes BF16. Score rows exceeding the gfx1151 LDS budget
-/// use bounded online attention for supported 256-element GQA heads.
-void LaunchBatchedAttention(const float* q, const float* k, const float* v,
-                            const float* gate, float* k_cache, float* v_cache,
-                            void* k_cache_f16, void* v_cache_f16,
-                            float* out_context, std::uint32_t layer_idx,
-                            std::uint32_t start_pos, std::size_t batch_size,
-                            std::uint32_t max_context, std::uint32_t num_heads,
-                            std::uint32_t num_kv_heads, std::uint32_t head_dim,
-                            hipStream_t stream = nullptr,
-                            bool skip_kv_write = false,
-                            void* out_context_bf16 = nullptr);
-
 /// Batched fuse of per-head Q/K RMSNorm, RoPE, and the KV-cache write across B
 /// tokens into one launch (opt-c010-qk-rope-kv). Writes the normed+roped Q into
 /// q_out and the normed+roped K into k_out, and K/V into every non-null cache
@@ -135,6 +118,8 @@ void LaunchBatchedFusedQKNormRoPEKvWrite(
 /// first_query skips output tiles only; all KV rows are still written. It
 /// must be a multiple of 32 below batch_size. Skipped output/LSE rows are
 /// untouched, and retained rows use the full call's original arithmetic.
+/// Takes the head shapes of detail::IsWmmaAttentionHeadShape (24/4, 16/4 and
+/// 8/2 heads of 256); writing K/V itself (`!skip_kv_write`) takes 24/4 only.
 /// Returns false when the shape is unsupported, so the caller can fall back.
 [[nodiscard]] bool LaunchQwenWmmaAttention(
     const float* q, const float* k, const float* v, const float* gate,
@@ -146,17 +131,6 @@ void LaunchBatchedFusedQKNormRoPEKvWrite(
     std::uint32_t key_begin = 0, bool skip_kv_write = false,
     std::span<float> packed_k_workspace = {},
     std::span<float> packed_v_workspace = {}, std::size_t first_query = 0);
-
-/// Large-batch causal attention using float32 QK/PV GEMMs and one reusable
-/// [batch, context] score buffer.
-void LaunchBatchedAttentionGemm(
-    hipblasHandle_t handle, const float* q, const float* k, const float* v,
-    const float* gate, float* k_cache, float* v_cache, void* k_cache_f16,
-    void* v_cache_f16, float* scores, float* out_context,
-    std::uint32_t layer_idx, std::uint32_t start_pos, std::size_t batch_size,
-    std::uint32_t max_context, std::uint32_t num_heads,
-    std::uint32_t num_kv_heads, std::uint32_t head_dim,
-    hipStream_t stream = nullptr);
 
 }  // namespace gufo::hip
 

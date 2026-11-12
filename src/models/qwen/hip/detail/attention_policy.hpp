@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <utility>
 
 #include "src/models/qwen/hip/execution_policy.hpp"
@@ -16,13 +17,6 @@ inline constexpr std::uint32_t kTiledAttentionHeadDim{256};
 inline constexpr std::size_t kSplitKDecodeAttentionMinContext{128};
 inline constexpr std::uint32_t kSplitKDecodeAttentionMaxSplits{32};
 inline constexpr std::uint32_t kFusedQkNormMaxHeadDim{256};
-
-// gfx1151 has 64 KiB LDS per workgroup. The baseline also reserves one
-// float per reduction lane, so a full 16K score row already exceeds it.
-[[nodiscard]] constexpr bool BatchedAttentionScoresFitLds(
-    std::size_t sequence_length) noexcept {
-  return sequence_length <= (64 * 1024 / sizeof(float) - 256);
-}
 
 struct AttentionSupportParams {
   std::size_t batch_size{0};
@@ -85,6 +79,49 @@ struct AttentionSupportParams {
   return params.batch_size != 0 &&
          params.num_heads == kTiledAttentionQueryHeads &&
          params.num_kv_heads == kTiledAttentionKvHeads &&
+         params.head_dim == kTiledAttentionHeadDim &&
+         static_cast<std::size_t>(params.start_pos) + params.batch_size <=
+             params.max_context &&
+         params.has_k_cache_f16 && params.has_v_cache_f16;
+}
+
+/// Head geometries (of 256 elements) the WMMA prefill attention is
+/// instantiated for: the Qwen3.8 27B's and the dense Qwen3.5 models' (4B and
+/// 9B, 0.8B and 2B). A block covers two query heads of one KV group, so the
+/// GQA ratio must be even; the head counts only set strides and the
+/// query-to-KV head mapping. A new geometry needs an entry here and an
+/// instantiation in LaunchQwenWmmaAttention.
+struct WmmaAttentionHeadShape {
+  std::uint32_t query_heads;
+  std::uint32_t kv_heads;
+};
+inline constexpr WmmaAttentionHeadShape kWmmaAttentionShape27B{
+    kTiledAttentionQueryHeads, kTiledAttentionKvHeads};
+inline constexpr WmmaAttentionHeadShape kWmmaAttentionShapeQwen35x16x4{16, 4};
+inline constexpr WmmaAttentionHeadShape kWmmaAttentionShapeQwen35x8x2{8, 2};
+
+[[nodiscard]] constexpr bool IsWmmaAttentionHeadShape(
+    std::uint32_t query_heads, std::uint32_t kv_heads) noexcept {
+  for (const auto shape :
+       {kWmmaAttentionShape27B, kWmmaAttentionShapeQwen35x16x4,
+        kWmmaAttentionShapeQwen35x8x2}) {
+    if (query_heads == shape.query_heads && kv_heads == shape.kv_heads) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// The WMMA prefill attention's shapes over FP16 caches. Writing this chunk's
+/// K and V itself (`!skip_kv_write`) reuses the tiled kernel's 24/4 pack, so
+/// the other shapes need the cache already written (the fused QK-norm kernel
+/// does it).
+[[nodiscard]] constexpr bool IsWmmaAttentionSupported(
+    const AttentionSupportParams& params, bool skip_kv_write) noexcept {
+  return params.batch_size != 0 &&
+         IsWmmaAttentionHeadShape(params.num_heads, params.num_kv_heads) &&
+         (skip_kv_write || (params.num_heads == kTiledAttentionQueryHeads &&
+                            params.num_kv_heads == kTiledAttentionKvHeads)) &&
          params.head_dim == kTiledAttentionHeadDim &&
          static_cast<std::size_t>(params.start_pos) + params.batch_size <=
              params.max_context &&

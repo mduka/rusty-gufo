@@ -31,7 +31,7 @@ current tree before working on it.
 | --- | --- | --- | --- | --- | --- |
 | G1 | Graphs for decode past the split-K threshold | dense Qwen | bit-exact | open | the 27B decode beyond position 127 runs eagerly today |
 | Q1 | WMMA BF16 prefill instead of the exact BF16 GEMM | dense Qwen | changes bits | open | 0.8B BF16 pp 0.88 ms/token against 0.11 for Q8_0 |
-| Q2 | WMMA or tiled prefill attention for 8/2 and 16/4 heads | Qwen3.5 0.8B to 9B | changes bits | open | long prompts; speeds up prompts past 16,128 positions |
+| Q2 | WMMA prefill attention for 8/2 and 16/4 heads | Qwen3.5 0.8B to 9B | changes bits | taken | 4B pp32768 projected 140 to about 2,200 tokens/s |
 | Q3 | The 27B fast paths for the other geometries | Qwen3.5 0.8B to 9B | changes bits | open | FP16 prefill from 1024 rows, packed projections |
 | Q4 | Q8_0 LM head (and q/k/v) for the 27B UD-Q8_K_XL | dense Qwen | changes bits | open | ~5 ms of 139 ms per token for the head alone |
 | Q5 | Smaller LM heads for the small models | Qwen3.5 0.8B to 4B | changes bits | open | the head is 24 to 27% of decode kernel time |
@@ -60,15 +60,36 @@ FP32 tiles) would help every BF16 checkpoint and the BF16 q/k/v of the 27B
 UD-Q8_K_XL.
 
 **Q2. Prefill attention for 8/2 and 16/4 heads** (`prefill.rs`,
-`attention_wmma.hip`; changes bits). The WMMA and tiled prefill attention
-take 24/4 heads of 256 only; the Qwen3.5 0.8B to 9B fall back to
+`attention_wmma.hip`; changes bits; taken). The WMMA prefill attention took
+24/4 heads of 256 only; the Qwen3.5 0.8B to 9B fell back to
 `LaunchBatchedAttention`, one block per query row and head with the row's
-scores in LDS. That is slow for long prompts. Beyond 16,128 visible positions a row's
-scores exceed the 64 KiB of LDS of a workgroup: the Rust engine then takes
-`batched_attention_long` with the decode's bounded online arithmetic (about
-760 tokens/s at 32K on the 0.8B), while the C++ launcher does not check the
-bound. The models' context is 262,144. A WMMA attention for these head
-groups fixes both.
+scores in LDS, and beyond the 16,128 positions those scores fit to
+`batched_attention_long`, the decode's online arithmetic per row and head.
+The WMMA kernel now takes its head counts as template parameters,
+instantiated for 24/4, 16/4 and 8/2; the 24/4 code objects are unchanged
+(instructions and resource metadata, function by function), and both
+fallbacks are gone. One attention layer of a 4096-row prompt chunk, ms
+(standalone kernels, packed KV heads included):
+
+| Visible positions | 16/4 before | 16/4 WMMA | 8/2 before | 8/2 WMMA |
+| --- | --- | --- | --- | --- |
+| 4,096 | 233.7 | 6.7 | 119.4 | 3.4 |
+| 8,192 | 1,596.9 | 17.7 | 797.7 | 8.7 |
+| 12,288 | 5,839.2 | 26.5 | 1,981.7 | 13.4 |
+| 16,384 (long path before) | 1,785.4 | 36.5 | 440.8 | 18.7 |
+| 32,768 (long path before) | 6,258.2 | 89.7 | 1,807.2 | 44.7 |
+| sum of a 32K prompt's 8 chunks | 27,741 | 377 | 8,006 | 186 |
+
+The LDS-score kernel was slower than the long path at the same depth (845 ms
+at 12,288 positions for 16/4) because a long score row leaves one workgroup
+per CU. A kernel trace of `gufo bench -p 32768` on the 4B Q4_K_M put 95% of
+the prefill in attention (224.3 of 236.1 s); without it the projection is
+about 2,200 tokens/s for pp32768 (from 139), 2,640 for pp8192 (from 460) and
+2,900 for pp2048 (from 1,825), measured on the kernels alone. Against an
+FP64 reference the WMMA output's relative L2 error is 2e-4 to 6.3e-4 (FP16
+queries and probabilities; the baseline's was below 3e-5); the checked
+prompts give the C++ tokens but for one near tie (0.085 between the two best
+logits; [Qwen3.5 checks](../qwen3.5/CHECKS.md)).
 
 **Q3. The 27B fast paths for the other geometries** (`routes.rs`
 `use_fp16_prefill`, `verify.rs`, `batch.rs`; changes bits). The FP16

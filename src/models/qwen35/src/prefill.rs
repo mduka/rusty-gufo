@@ -363,6 +363,10 @@ pub(crate) fn prefill_chunk(
                 )?;
                 // The packed KV workspaces are the full-batch FFN rows, as
                 // in C++: their size decides how many heads a pass packs.
+                // Every head shape the engine loads (`shape_supported`) runs
+                // here; C++ runs the dense Qwen3.5 shapes (16/4, 8/2) through
+                // its baseline attention instead, so their logits differ from
+                // Gufo's in the last bits (FP16 queries and probabilities).
                 let (packed_k_len, packed_v_len) = (x.ffn_gate.len(), x.ffn_up.len());
                 let launched = k::wmma_attention(
                     s,
@@ -387,36 +391,11 @@ pub(crate) fn prefill_chunk(
                     first_row,
                 )?;
                 if launched == Launch::Unsupported {
-                    // Other head shapes: the baseline attention (the tiled
-                    // fallback of C++ takes 24/4 heads only, which the WMMA
-                    // kernel never declines with FP16 caches). The fused
-                    // QK-norm kernel already wrote this chunk's K and V.
-                    // Past the scores a workgroup holds in LDS, 256-element
-                    // GQA heads take the bounded online arithmetic.
-                    let (k_cache, v_cache) = st.kv.as_mut_slice().split_at(kv_plane);
-                    let launch = if start_pos as usize + batch > 16_128 {
-                        k::batched_attention_long
-                    } else {
-                        k::batched_attention
-                    };
-                    launch(
-                        s,
-                        x.q.slice(0..batch * attention),
-                        x.k.slice(0..batch * kv),
-                        x.v.slice(0..batch * kv),
-                        x.ssm_gate.slice(0..batch * attention),
-                        k_cache,
-                        v_cache,
-                        x.ssm_out.slice_mut(0..batch * attention),
-                        attention_layer,
-                        start_pos,
-                        batch,
-                        max_context,
-                        c.num_attention_heads,
-                        c.num_key_value_heads,
-                        c.head_dim,
-                        true,
-                    )?;
+                    return Err(LaunchError::InvalidArgument {
+                        param: "num_attention_heads",
+                        reason: "the WMMA prefill attention declined the head shape",
+                    }
+                    .into());
                 }
                 if half {
                     k::float_to_fp16(

@@ -21,9 +21,6 @@ headers = [
 path = "src/models/qwen/vision/kernels.hip"
 
 [[source]]
-path = "src/models/qwen/hip/kernels/attention_batched.hip"
-
-[[source]]
 path = "src/models/qwen/hip/kernels/attention_decode.hip"
 
 [[source]]
@@ -977,7 +974,7 @@ probes = [
 name = "wmma_attention"
 cpp = "LaunchQwenWmmaAttentionFlat"
 returns = "supported"
-doc = "Causal attention with gate of `batch_size` rows over FP16 cache rows `0..start_pos + batch_size` with WMMA; declines shapes other than 24/4 heads of 256. From 1024 rows it packs KV heads into the workspaces, as many as fit. Output rows before `first_query` are skipped and left untouched; the others keep the full call's arithmetic."
+doc = "Causal attention with gate of `batch_size` rows over FP16 cache rows `0..start_pos + batch_size` with WMMA; declines shapes other than 24/4 (Qwen3.8 27B), 16/4 (Qwen3.5 4B, 9B) and 8/2 (Qwen3.5 0.8B, 2B) heads of 256. From 1024 rows it packs KV heads into the workspaces, as many as fit. Output rows before `first_query` are skipped and left untouched; the others keep the full call's arithmetic."
 requires = ["start_pos + batch_size <= max_context", "first_query < batch_size", "first_query % 32 == 0"]
 params = [
   { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
@@ -1008,6 +1005,11 @@ probes = [
   { layer_idx = 0, start_pos = 30, batch_size = 1030, max_context = 1100, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 140000, packed_v_len = 140000, first_query = 0 },
   { layer_idx = 0, start_pos = 0, batch_size = 1100, max_context = 1100, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 600000, packed_v_len = 600000, first_query = 1024 },
   { layer_idx = 1, start_pos = 7, batch_size = 70, max_context = 128, num_heads = 24, num_kv_heads = 4, head_dim = 256, packed_k_len = 0, packed_v_len = 0, first_query = 64 },
+  { layer_idx = 1, start_pos = 7, batch_size = 20, max_context = 64, num_heads = 16, num_kv_heads = 4, head_dim = 256, packed_k_len = 0, packed_v_len = 0, first_query = 0 },
+  { layer_idx = 1, start_pos = 7, batch_size = 70, max_context = 128, num_heads = 8, num_kv_heads = 2, head_dim = 256, packed_k_len = 0, packed_v_len = 0, first_query = 32 },
+  # Two of four KV heads per packing pass.
+  { layer_idx = 1, start_pos = 0, batch_size = 1100, max_context = 1100, num_heads = 16, num_kv_heads = 4, head_dim = 256, packed_k_len = 300000, packed_v_len = 300000, first_query = 0 },
+  { layer_idx = 0, start_pos = 30, batch_size = 1030, max_context = 1100, num_heads = 8, num_kv_heads = 2, head_dim = 256, packed_k_len = 600000, packed_v_len = 600000, first_query = 0 },
 ]
 
 [[launcher]]
@@ -1953,70 +1955,6 @@ params = [
   { name = "num_elements", kind = "scalar", type = "usize" },
 ]
 probes = [{ num_elements = 3584 }, { num_elements = 5 }]
-
-[[launcher]]
-name = "batched_attention"
-cpp = "LaunchBatchedAttention"
-returns = "void"
-doc = "Causal attention with gate of `batch_size` rows over FP16 cache rows `0..start_pos + batch_size`, one block per query row and head (the C++ prefill fallback for head shapes the WMMA attention declines). The scores of a row live in LDS beside a 1 KiB reduction buffer, so at most 16128 positions are visible in the 64 KiB of a workgroup; `skip_kv_write` when the fused QK-norm kernel wrote this chunk's K and V."
-requires = ["start_pos + batch_size <= max_context", "start_pos + batch_size <= 16128", "num_kv_heads > 0", "num_heads % num_kv_heads == 0"]
-params = [
-  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "k", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
-  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
-  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
-  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
-  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
-  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
-  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "layer_idx", kind = "scalar", type = "u32" },
-  { name = "start_pos", kind = "scalar", type = "u32" },
-  { name = "batch_size", kind = "scalar", type = "usize" },
-  { name = "max_context", kind = "scalar", type = "u32" },
-  { name = "num_heads", kind = "scalar", type = "u32" },
-  { name = "num_kv_heads", kind = "scalar", type = "u32" },
-  { name = "head_dim", kind = "scalar", type = "u32" },
-  { name = "stream", kind = "stream" },
-  { name = "skip_kv_write", kind = "scalar", type = "bool" },
-  { name = "out_context_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
-]
-probes = [
-  { layer_idx = 1, start_pos = 7, batch_size = 20, max_context = 64, num_heads = 8, num_kv_heads = 2, head_dim = 256, skip_kv_write = true },
-  { layer_idx = 0, start_pos = 0, batch_size = 33, max_context = 40, num_heads = 16, num_kv_heads = 4, head_dim = 256, skip_kv_write = false },
-]
-
-[[launcher]]
-name = "batched_attention_long"
-cpp = "LaunchBatchedAttention"
-returns = "void"
-doc = "batched_attention past the 16128 positions a row of scores fits in LDS: 256-element GQA heads with the bounded online decode arithmetic."
-requires = ["start_pos + batch_size <= max_context", "start_pos + batch_size >= 16129", "head_dim == 256", "num_kv_heads > 0", "num_heads % num_kv_heads == 0"]
-params = [
-  { name = "q", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "k", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
-  { name = "v", kind = "in", elem = "f32", len = "batch_size * num_kv_heads * head_dim" },
-  { name = "gate", kind = "in", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "k_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
-  { name = "v_cache", kind = "const", cpp_type = "float*", value = "nullptr" },
-  { name = "k_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
-  { name = "v_cache_f16", kind = "inout", elem = "f16", len = "(layer_idx * max_context + start_pos + batch_size) * num_kv_heads * head_dim" },
-  { name = "out_context", kind = "out", elem = "f32", len = "batch_size * num_heads * head_dim" },
-  { name = "layer_idx", kind = "scalar", type = "u32" },
-  { name = "start_pos", kind = "scalar", type = "u32" },
-  { name = "batch_size", kind = "scalar", type = "usize" },
-  { name = "max_context", kind = "scalar", type = "u32" },
-  { name = "num_heads", kind = "scalar", type = "u32" },
-  { name = "num_kv_heads", kind = "scalar", type = "u32" },
-  { name = "head_dim", kind = "scalar", type = "u32" },
-  { name = "stream", kind = "stream" },
-  { name = "skip_kv_write", kind = "scalar", type = "bool" },
-  { name = "out_context_bf16", kind = "const", cpp_type = "void*", value = "nullptr" },
-]
-probes = [
-  { layer_idx = 1, start_pos = 16200, batch_size = 20, max_context = 16300, num_heads = 8, num_kv_heads = 2, head_dim = 256, skip_kv_write = true },
-  { layer_idx = 0, start_pos = 16128, batch_size = 1, max_context = 16129, num_heads = 16, num_kv_heads = 4, head_dim = 256, skip_kv_write = false },
-]
 
 [[launcher]]
 name = "quantize_bf16_to_q8_0"

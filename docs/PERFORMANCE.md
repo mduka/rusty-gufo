@@ -32,9 +32,6 @@ Not measured for 0.1.0 yet; the numbers follow.
 | Qwen3.5 4B Q4_K_M | 2,419 | 140 | 60.8 | 45.1 |
 | Qwen3.5 9B Q4_K_M | 1,412 | 135 | 33.2 | 28.0 |
 
-Prompts past 16,128 tokens take a slower attention path on these models
-([known limits](models/qwen3.5/README.md#known-limits)).
-
 ## Qwen3.6 35B-A3B
 
 | File | pp512 | pp32768 | tg128 | tg128 @ 32K |
