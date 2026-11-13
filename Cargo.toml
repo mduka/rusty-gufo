@@ -6,6 +6,7 @@ members = [
   "src/cli/serve",
   "src/core",
   "src/core/resample",
+  "src/core/wav_decode",
   "src/eval",
   "src/ffmpeg",
   "src/formats",
@@ -20,6 +21,8 @@ members = [
   "src/models/gemma4/kernels",
   "src/models/nemotron",
   "src/models/nemotron/kernels",
+  "src/models/nemotron_asr",
+  "src/models/nemotron_asr/kernels",
   "src/models/omnivoice",
   "src/models/omnivoice/kernels",
   "src/models/qwen",
@@ -50,6 +53,8 @@ gufo-cli-kernels = { path = "src/cli/kernels" }
 gufo-core = { path = "src/core" }
 # Gufo 0.34.0's resampler (soxr HQ response), verbatim: VoxCPM2 references.
 gufo-resample = { path = "src/core/resample" }
+# Gufo 0.34.0's strict WAV reader, verbatim: Nemotron ASR uploads.
+gufo-wav-decode = { path = "src/core/wav_decode" }
 gufo-deepseek-v4-flash-kernels = { path = "src/models/deepseek_v4_flash/kernels" }
 gufo-eval = { path = "src/eval" }
 gufo-ffmpeg = { path = "src/ffmpeg" }

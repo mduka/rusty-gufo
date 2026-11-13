@@ -41,13 +41,17 @@ the notices of the versions they actually ship.
 | DS4 GB10/GX10 fork | Adapted paired MoE launch code, now HIP | `MIT` | `910501e` | [xangel82/DS4](https://github.com/xangel82/DS4-GB10-GX10-DSpark-CUDA) |
 | OmniVoice extension for Gufo | Ported to Rust (`src/models/omnivoice`); its HIP kernels compiled in | `MIT` | `4bf376c` | [gufo-extensions/omnivoice](https://github.com/gufo-extensions/omnivoice) |
 | OmniVoice | Prompt preprocessing, reference and output audio processing, the unmasking schedule and position choice, generation with chunking, and the language table, through the OmniVoice extension | `Apache-2.0` | `08be0b4` | [k2-fsa/OmniVoice](https://github.com/k2-fsa/OmniVoice) |
-| Hugging Face transformers | The OmniVoice audio tokenizer's encoder and decoder (HiggsAudioV2Tokenizer, DAC, HuBERT) and the generator's Qwen3 layers, through the OmniVoice extension | `Apache-2.0` | `5.22.2` | [huggingface/transformers](https://github.com/huggingface/transformers) |
+| Hugging Face transformers | The OmniVoice audio tokenizer's encoder and decoder (HiggsAudioV2Tokenizer, DAC, HuBERT) and the generator's Qwen3 layers, through the OmniVoice extension; Nemotron 3.5 ASR's `Nemotron3_5AsrForRNNT` and `NemotronAsrStreamingEncoder` (cache-aware FastConformer encoder, language prompt projector, RNN-T prediction and joint networks, greedy decoding), its `NemotronAsrStreamingFeatureExtractor` and the tokenizer's Metaspace decoding, through the Nemotron ASR extension | `Apache-2.0` | `5.22.2` (`6d195c6262a0ac2ef44f7b9a308617562286ff45`) | [huggingface/transformers](https://github.com/huggingface/transformers) |
 | pydub | Silence detection and removal reproduced in OmniVoice's audio processing | `MIT` | `0.25.1` | [jiaaro/pydub](https://github.com/jiaaro/pydub) |
 | torchaudio | Sinc resampler reproduced in OmniVoice's audio processing | `BSD-2-Clause` | `2.11.1` | [pytorch/audio](https://github.com/pytorch/audio) |
 | VoxCPM extension for Gufo | Ported to Rust (`src/models/voxcpm`); its HIP kernels compiled in | `MIT` | `0941cd1` | [gufo-extensions/voxcpm](https://github.com/gufo-extensions/voxcpm) |
 | VoxCPM | VoxCPM2Model's MiniCPM4 stacks, local encoder, local DiT and CFM sampler, AudioVAE V2, the prompt construction, stop and retry rules, and the tokenizer's split of multi-character Chinese tokens, through the VoxCPM extension | `Apache-2.0` | `300e4260b509066151d623dc9c0aa922cf82232b` | [OpenBMB/VoxCPM](https://github.com/OpenBMB/VoxCPM) |
 | DAC | The convolution blocks and Snake activation of VoxCPM's AudioVAE V2, which VoxCPM bases on DAC, through the VoxCPM extension | `MIT` | `c7cfc5d2647e26471dc394f95846a0830e7bec34` | [descriptinc/descript-audio-codec](https://github.com/descriptinc/descript-audio-codec) |
 | CosyVoice | Flow matching of VoxCPM's local DiT, which VoxCPM credits to CosyVoice, through the VoxCPM extension | `Apache-2.0` | `074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc` | [FunAudioLLM/CosyVoice](https://github.com/FunAudioLLM/CosyVoice) |
+| Nemotron ASR extension for Gufo | Ported to Rust (`src/models/nemotron_asr`); its HIP kernels compiled in | `MIT` | `c256b69` | [gufo-extensions/nemotron_asr](https://github.com/gufo-extensions/nemotron_asr) |
+| NVIDIA NeMo | Through transformers, the cache-aware FastConformer, its causal convolutions, the RNN-T decoder and the greedy decoding rules of Nemotron 3.5 ASR, through the Nemotron ASR extension | `Apache-2.0` | `079e48770098a4cffcf542a4bc974cafc84502a3` | [NVIDIA-NeMo/NeMo](https://github.com/NVIDIA-NeMo/NeMo) |
+| ESPnet | Through NeMo, the relative-position multi-head attention of Nemotron 3.5 ASR's encoder, through the Nemotron ASR extension | `Apache-2.0` | As credited in NeMo's `multi_head_attention.py` | [espnet/espnet](https://github.com/espnet/espnet) |
+| librosa | The Slaney mel filter bank of Nemotron 3.5 ASR's feature extractor, through the Nemotron ASR extension | `ISC` | `9caf46a4ecaeb8ea24bb541231065c9f761174ae` | [librosa/librosa](https://github.com/librosa/librosa) |
 | Gemma 4 extension for Gufo (Francesco Moca) | Ported to Rust (`src/models/gemma4`); its HIP kernels compiled in, among them its copies of Gufo's GGML and binary16 kernels | `MIT` | `a31ce42` | [franzmoca/gemma4-gufo-extension](https://github.com/franzmoca/gemma4-gufo-extension) |
 | Qwen3.6 35B-A3B extension for Gufo (Strycast) | Ported to Rust (`src/models/qwen35moe`); its HIP kernels compiled in, among them its copies of Gufo's Qwen kernels and, through Flash-Next's copies, llama.cpp's quantized matrix kernels (`src/models/qwen35moe/kernels/vendor`) | `MIT` | `4882b7a` (Strycast `8c946372`) | [slimsami/strycast-qwen35moe-gufo-extension](https://github.com/slimsami/strycast-qwen35moe-gufo-extension) |
 | Nemotron extension for Gufo | Ported to Rust (`src/models/nemotron`); its HIP kernels compiled in, among them llama.cpp's quantized matrix kernels through Gufo's and DS4's copies (`src/models/nemotron/kernels/rocm/mmq/VENDOR.md`) | `MIT` | `62f85dc` | [gufo-extensions/nemotron](https://github.com/gufo-extensions/nemotron) |
@@ -61,6 +65,12 @@ The VoxCPM2 rows' license texts are `licenses/voxcpm-extension.txt`,
 `licenses/VoxCPM.txt`, `licenses/DAC.txt` and `licenses/CosyVoice.txt`; the
 parts the extension adapted from Gufo (its safetensors reader and hipBLASLt
 plan cache) keep Gufo's MIT license (`LICENSE-MIT`).
+The Nemotron 3.5 ASR rows' license texts are
+`licenses/nemotron-asr-extension.txt`, `licenses/transformers.txt`,
+`licenses/NeMo.txt` (NeMo and ESPnet) and `licenses/librosa.txt`; the
+extension's safetensors reader, adapted from Gufo, and Gufo 0.34.0's WAV
+reader and resampler (`src/core/wav_decode`, `src/core/resample`) keep
+Gufo's MIT license (`LICENSE-MIT`).
 The Gemma 4 row's license text is `licenses/gemma4-extension.txt`; the parts
 it copied from Gufo keep Gufo's MIT license (`LICENSE-MIT`).
 The Qwen3.6 35B-A3B row's license text is `licenses/qwen35moe-extension.txt`;
@@ -243,6 +253,18 @@ responsible for the terms governing their location and use.
 - **Reference implementation**: OpenBMB's VoxCPM Python package
   (Apache-2.0) at `300e4260b509066151d623dc9c0aa922cf82232b`;
   development-only.
+
+### Nemotron 3.5 ASR Streaming 0.6B
+
+- **Artifact**: [nvidia/nemotron-3.5-asr-streaming-0.6b](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+  at `ea30d66debe3740a08b573244286791d423d6b3e`, the Hugging Face directory
+  with float32 safetensors, a tokenizer and the model and processor
+  configuration.
+- **License**: [OpenMDW-1.1](https://openmdw.ai/license/1-1/), as NVIDIA's
+  model card declares. rusty-gufo neither ships nor automatically downloads
+  these weights.
+- **Reference implementation**: Hugging Face transformers 5.22.2
+  (Apache-2.0); development-only.
 
 ### Qwen-Image-2.1
 

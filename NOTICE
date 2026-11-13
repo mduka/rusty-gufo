@@ -31,6 +31,12 @@ Adapted code includes:
 - The VoxCPM extension for Gufo (MIT), and through it VoxCPM (Apache-2.0,
   Copyright OpenBMB), DAC (MIT, Copyright (c) 2023-present, Descript) and
   CosyVoice (Apache-2.0, Copyright (c) 2024 Alibaba Inc).
+- The Nemotron ASR extension for Gufo (MIT), and through it Hugging Face
+  transformers (Apache-2.0, Copyright 2026 The HuggingFace Inc. team), NVIDIA
+  NeMo (Apache-2.0, Copyright (c) 2020, NVIDIA CORPORATION & AFFILIATES),
+  ESPnet through NeMo (Apache-2.0, Copyright 2017 Johns Hopkins University
+  (Shinji Watanabe)) and librosa (ISC, Copyright (c) 2013--2026, librosa
+  development team).
 
 Strix Halo optimization inspiration also came from these MIT-licensed projects:
 - LaurentZuijdwijk/llama.cpp: https://github.com/LaurentZuijdwijk/llama.cpp

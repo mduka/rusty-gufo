@@ -1,0 +1,30 @@
+[package]
+name = "gufo-nemotron-asr"
+version = "0.1.0"
+description = "Nemotron 3.5 ASR Streaming 0.6B speech recognition (NVIDIA) on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The kernels and reference tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-nemotron-asr --features gpu
+gpu = []
+# Tests that need the model files (GUFO_NEMOTRON_ASR_MODEL): --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-hip.workspace = true
+gufo-nemotron-asr-kernels = { path = "kernels" }
+
+[dev-dependencies]
+gufo-wav-decode.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

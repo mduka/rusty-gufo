@@ -1,0 +1,11 @@
+[package]
+name = "gufo-wav-decode"
+version = "0.1.0"
+description = "Strict RIFF WAV reader: integer PCM and 32-bit float to f32 (Gufo 0.34.0's src/core/wav_decode, verbatim)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

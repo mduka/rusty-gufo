@@ -1,0 +1,21 @@
+[package]
+name = "gufo-nemotron-asr-kernels"
+version = "0.1.0"
+description = "Nemotron 3.5 ASR HIP kernels behind generated, checked Rust launchers"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-nemotron-asr-kernels --features gpu
+gpu = []
+
+[dependencies]
+gufo-hip.workspace = true
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true

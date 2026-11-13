@@ -42,6 +42,7 @@ use crate::gpu_queues::{
 use crate::serve_cli::{self, LlmOptions, Modality, ServeParse, SpeechOptions};
 
 mod embedding;
+mod nemotron_asr;
 mod omnivoice;
 mod voxcpm;
 
@@ -599,20 +600,43 @@ fn tts_runtime(
 
 fn load_asr(options: &SpeechOptions) -> std::result::Result<AsrService, u8> {
     let mut load_log = ModelLoadLog::new("asr", &options.model);
-    let service = AsrService::new(AsrServiceOptions {
-        model_root: options.model.clone(),
-        native_context_tokens: options.context,
-        validate_model: true,
-        model_validator: Some(Box::new(|root| {
-            gufo_qwen3_asr::config::ModelConfig::load(root).is_ok_and(|c| c.is_supported())
-        })),
-        model_id: options.served_model_name.clone(),
-        runner: None,
-        runtime_factory: Some(Box::new(asr_runtime)),
-    });
+    let nemotron = nemotron_asr::probe(&options.model);
+    let service = if nemotron {
+        let model_id = if options.served_model_name.is_empty() {
+            nemotron_asr::MODEL_ID.to_string()
+        } else {
+            options.served_model_name.clone()
+        };
+        AsrService::new(AsrServiceOptions {
+            model_root: options.model.clone(),
+            native_context_tokens: options.context,
+            validate_model: false,
+            model_validator: None,
+            model_id,
+            runner: None,
+            runtime_factory: Some(Box::new(|root: &Path, _| nemotron_asr::runtime(root))),
+        })
+    } else {
+        AsrService::new(AsrServiceOptions {
+            model_root: options.model.clone(),
+            native_context_tokens: options.context,
+            validate_model: true,
+            model_validator: Some(Box::new(|root| {
+                gufo_qwen3_asr::config::ModelConfig::load(root).is_ok_and(|c| c.is_supported())
+            })),
+            model_id: options.served_model_name.clone(),
+            runner: None,
+            runtime_factory: Some(Box::new(asr_runtime)),
+        })
+    };
     if !service.ready() {
         eprintln!(
-            "Error enabling Qwen3-ASR service: {}",
+            "Error enabling {} service: {}",
+            if nemotron {
+                "Nemotron ASR"
+            } else {
+                "Qwen3-ASR"
+            },
             service.initialization_error()
         );
         return Err(1);

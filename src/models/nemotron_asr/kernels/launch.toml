@@ -1,0 +1,399 @@
+# Kernel contract for the Nemotron 3.5 ASR kernels (docs/development/DESIGN.md).
+# Extents are element counts; the C++ launcher takes `hipStream_t` last.
+# Trusted base: a wrong extent compiles and lets a kernel overrun its buffer.
+# Review changes like unsafe code; every launcher needs probes
+# (tests/extents.rs).
+#
+# The kernels are the Nemotron ASR extension's (gufo-extensions/nemotron_asr
+# c256b69, 0.1.2, kernels/), copied verbatim into ../hip. float16 travels as raw
+# `std::uint16_t` bits there. Launchers whose C++ signature the contract
+# cannot describe directly go through adapters.hip.
+
+[library]
+name = "nemotron_asr"
+root = "../../../.."
+namespace = "gufo::models::nemotron_asr::kernels"
+f16_type = "std::uint16_t"
+headers = [
+  "src/models/nemotron_asr/hip/kernels.hpp",
+  "src/models/nemotron_asr/hip/wmma.hpp",
+  "src/models/nemotron_asr/kernels/adapters.hpp",
+]
+
+# The extension's gufo_nemotron_asr_hip target: the preset's -O2, then -O3
+# from its own options (extension.cmake).
+[[source]]
+path = "src/models/nemotron_asr/hip/kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/nemotron_asr/hip/wmma.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+# Host code only: the flat forms.
+[[source]]
+path = "src/models/nemotron_asr/kernels/adapters.hip"
+
+# --- Conversions and the matrix-core product (kernels.hpp, wmma.hpp) ---------
+
+[[launcher]]
+name = "to_half"
+cpp = "ToHalfFlat"
+returns = "void"
+doc = "`y[i] = f16(x[i])`, rounded to nearest even."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n" },
+  { name = "y", kind = "out", elem = "f16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+probes = [{ n = 1000 }, { n = 1 }, { n = 0 }]
+
+[[launcher]]
+name = "half_to_tiles"
+cpp = "HalfToTiles"
+returns = "void"
+doc = "Repacks float16 `[rows][columns]` into the product's tiles of 16 rows by 32 columns, the tiles of 16 rows following each other along the columns."
+params = [
+  { name = "weights", kind = "in", elem = "f16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  # A row past the last multiple of 16 lands in a whole tile row.
+  { name = "tiles", kind = "out", elem = "f16", len = "(rows + 15) / 16 * 16 * columns" },
+]
+# The kernel indexes with int.
+requires = ["columns % 32 == 0", "(rows + 15) / 16 * 16 * columns <= 2147483647"]
+probes = [{ rows = 48, columns = 96 }, { rows = 17, columns = 64 }, { rows = 16, columns = 32 }, { rows = 0, columns = 32 }]
+
+[[launcher]]
+name = "wmma_linear"
+cpp = "WmmaLinearFlat"
+returns = "supported"
+doc = "`y[rows][out] = scale * x[rows][columns] W^T`, plus `y` when `accumulate`, plus `bias[out]` when given, then ReLU when `relu`, for float16 x and tiles W on the matrix cores, float32 sums. Unsupported (nothing launched) for 0 rows, `columns` not a multiple of 32 or `out` not a multiple of 16."
+params = [
+  { name = "x", kind = "in", elem = "f16", len = "rows * columns" },
+  { name = "tiles", kind = "in", elem = "f16", len = "out * columns" },
+  { name = "y", kind = "inout", elem = "f32", len = "rows * out" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "out", kind = "scalar", type = "usize" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "bias", kind = "in", elem = "f32", len = "out", optional = true },
+  { name = "relu", kind = "scalar", type = "bool" },
+]
+# The kernel indexes activations with int; the grid's second dimension holds
+# the groups of activation rows.
+requires = ["rows * columns <= 2147483647", "out <= 2147483647", "rows <= 1048560"]
+probes = [
+  { rows = 1, columns = 32, out = 16, accumulate = false, scale = 1.0, relu = false },
+  { rows = 17, columns = 96, out = 48, accumulate = true, scale = 0.5, relu = false, with = ["bias"] },
+  { rows = 140, columns = 1024, out = 80, accumulate = false, scale = 1.0, relu = true, with = ["bias"] },
+  { rows = 300, columns = 64, out = 16, accumulate = true, scale = 1.0, relu = false },
+]
+
+[[launcher]]
+name = "wmma_linear_half"
+cpp = "WmmaLinearHalf"
+returns = "supported"
+doc = "`y[rows][out] = x[rows][columns] W^T`, plus `bias[out]` when given, then ReLU when `relu`, stored as float16, for float16 x and tiles W on the matrix cores, float32 sums. Unsupported (nothing launched) for the shapes `wmma_linear` refuses."
+params = [
+  { name = "x", kind = "in", elem = "f16", len = "rows * columns" },
+  { name = "tiles", kind = "in", elem = "f16", len = "out * columns" },
+  { name = "y", kind = "out", elem = "f16", len = "rows * out" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "out", kind = "scalar", type = "usize" },
+  { name = "bias", kind = "in", elem = "f32", len = "out", optional = true },
+  { name = "relu", kind = "scalar", type = "bool" },
+]
+requires = ["rows * columns <= 2147483647", "out <= 2147483647", "rows <= 1048560"]
+probes = [
+  { rows = 1, columns = 32, out = 16, relu = false },
+  { rows = 1105, columns = 256, out = 256, relu = true, with = ["bias"] },
+  { rows = 14, columns = 1024, out = 2048, relu = true, with = ["bias"] },
+]
+
+# --- Subsampling --------------------------------------------------------------
+
+[[launcher]]
+name = "subsample_input"
+cpp = "SubsampleInput"
+returns = "void"
+doc = "The stem: a 3x3 stride-2 convolution of the single-channel mel spectrogram `[rows][bins]` (frequency padded by 2 before and 1 after), plus bias, then ReLU: `out [out_rows][out_freq][channels]` as float16; reads mel rows up to `2 * out_rows`."
+params = [
+  { name = "mel", kind = "in", elem = "f32", len = "(2 * out_rows + 1) * bins" },
+  { name = "bins", kind = "scalar", type = "i32" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * 9" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "channels", kind = "scalar", type = "i32" },
+  { name = "out", kind = "out", elem = "f16", len = "out_rows * out_freq * channels" },
+  { name = "out_rows", kind = "scalar", type = "i32" },
+  { name = "out_freq", kind = "scalar", type = "i32" },
+]
+# One thread per channel; the block stages the three rows' columns.
+requires = ["channels >= 1", "channels <= 1024", "(2 * out_rows + 1) * bins <= 2147483647"]
+probes = [
+  { bins = 128, channels = 256, out_rows = 5, out_freq = 65 },
+  { bins = 20, channels = 3, out_rows = 1, out_freq = 11 },
+  { bins = 128, channels = 256, out_rows = 0, out_freq = 65 },
+]
+
+[[launcher]]
+name = "subsample_depthwise"
+cpp = "SubsampleDepthwise"
+returns = "void"
+doc = "A depthwise 3x3 stride-2 convolution of float16 `[rows][in_freq][channels]` plus bias (frequency padded like the stem), summed in float32: `out [out_rows][out_freq][channels]` as float16; reads input rows up to `2 * out_rows`."
+params = [
+  { name = "input", kind = "in", elem = "f16", len = "(2 * out_rows + 1) * in_freq * channels" },
+  { name = "in_freq", kind = "scalar", type = "i32" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * 9" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "channels", kind = "scalar", type = "i32" },
+  { name = "out", kind = "out", elem = "f16", len = "out_rows * out_freq * channels" },
+  { name = "out_rows", kind = "scalar", type = "i32" },
+  { name = "out_freq", kind = "scalar", type = "i32" },
+]
+# A thread per pair of channels (16-bit pairs).
+requires = ["channels % 2 == 0", "(2 * out_rows + 1) * in_freq * channels <= 2147483647"]
+probes = [
+  { in_freq = 65, channels = 256, out_rows = 4, out_freq = 33 },
+  { in_freq = 9, channels = 6, out_rows = 1, out_freq = 5 },
+  { in_freq = 65, channels = 256, out_rows = 0, out_freq = 33 },
+]
+
+# --- Element-wise and norms ---------------------------------------------------
+
+[[launcher]]
+name = "layer_norm"
+cpp = "LayerNorm"
+returns = "void"
+doc = "`y = LayerNorm(x) * weight + bias` over rows of `cols` (eps 1e-5)."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "weight", kind = "in", elem = "f32", len = "cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "y", kind = "out", elem = "f32", len = "rows * cols" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "cols", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 3, cols = 1024 }, { rows = 1, cols = 5 }, { rows = 0, cols = 5 }]
+
+[[launcher]]
+name = "layer_norm_in_place"
+cpp = "LayerNormInPlace"
+returns = "void"
+doc = "`layer_norm` with `x` as its own output."
+params = [
+  { name = "x", kind = "inout", elem = "f32", len = "rows * cols" },
+  { name = "weight", kind = "in", elem = "f32", len = "cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "cols", kind = "scalar", type = "i32" },
+]
+probes = [{ rows = 3, cols = 1024 }, { rows = 1, cols = 5 }, { rows = 0, cols = 5 }]
+
+[[launcher]]
+name = "layer_norm_half"
+cpp = "LayerNormHalf"
+returns = "void"
+doc = "`layer_norm` as float16, followed by SiLU when `silu`."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "rows * cols" },
+  { name = "weight", kind = "in", elem = "f32", len = "cols" },
+  { name = "bias", kind = "in", elem = "f32", len = "cols" },
+  { name = "y", kind = "out", elem = "f16", len = "rows * cols" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "cols", kind = "scalar", type = "i32" },
+  { name = "silu", kind = "scalar", type = "bool" },
+]
+probes = [{ rows = 3, cols = 1024, silu = true }, { rows = 1, cols = 5, silu = false }, { rows = 0, cols = 5, silu = false }]
+
+[[launcher]]
+name = "silu_half"
+cpp = "SiluHalfFlat"
+returns = "void"
+doc = "`y[i] = f16(silu(x[i]))`."
+params = [
+  { name = "x", kind = "in", elem = "f32", len = "n" },
+  { name = "y", kind = "out", elem = "f16", len = "n" },
+  { name = "n", kind = "scalar", type = "usize" },
+]
+probes = [{ n = 1000 }, { n = 1 }, { n = 0 }]
+
+# --- Self-attention and the convolution module --------------------------------
+
+[[launcher]]
+name = "rel_pos_attention_half"
+cpp = "RelPosAttentionHalfFlat"
+returns = "supported"
+doc = "Transformer-XL attention with chunked limited context over heads of 128 dimensions: a query (absolute frame `first_query + t`) attends to the keys from `left` frames before its chunk to the chunk's end, at most the pass's last, with scores `((q + u) . k + (q + v) . pos[pos_zero + query - key]) * scale`. Queries, keys and values are `qkv` rows `[q | k | v]` (`q_stride` apart), earlier keys and values the caches' rows (frames `first_key` to `first_query - 1`). The products take float16 operands with float32 sums, one block per group of chunks (as many whole chunks as fit in 16 queries, or one chunk in tiles of 16) and head; the softmax is float32 and the output `[queries][heads * 128]` float16. Rows are read as float4: unsupported (nothing launched) unless `qkv`, the caches and `pos` are 16-byte aligned."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "queries * q_stride" },
+  { name = "cache_keys", kind = "in", elem = "f32", len = "(first_query - first_key) * heads * 128" },
+  { name = "cache_values", kind = "in", elem = "f32", len = "(first_query - first_key) * heads * 128" },
+  { name = "pos", kind = "in", elem = "f32", len = "pos_rows * heads * 128" },
+  { name = "bias_u", kind = "in", elem = "f32", len = "heads * 128" },
+  { name = "bias_v", kind = "in", elem = "f32", len = "heads * 128" },
+  { name = "out", kind = "out", elem = "f16", len = "queries * heads * 128" },
+  { name = "queries", kind = "scalar", type = "i32" },
+  { name = "heads", kind = "scalar", type = "i32" },
+  { name = "q_stride", kind = "scalar", type = "i32" },
+  { name = "first_query", kind = "scalar", type = "usize" },
+  { name = "first_key", kind = "scalar", type = "usize" },
+  { name = "chunk", kind = "scalar", type = "i32" },
+  { name = "left", kind = "scalar", type = "i32" },
+  { name = "pos_zero", kind = "scalar", type = "i32" },
+  { name = "pos_rows", kind = "scalar", type = "i32" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+# Keys sit within `left` frames before a query's chunk start and before its
+# chunk end: distances from -(chunk - 1) to left + chunk - 1, rows of `pos`
+# around `pos_zero`; a group's distances beyond them (keys outside every
+# query's window) read the table's first or last row. The launcher throws
+# for a window beyond 256 keys, a table shorter than the window and
+# misaligned rows, none of which may cross into Rust: the requires rule out
+# the first two, the adapter declines the third.
+requires = [
+  "first_key <= first_query",
+  "q_stride >= 3 * heads * 128",
+  "q_stride % 4 == 0",
+  "chunk >= 1",
+  "chunk <= pos_zero + 1",
+  "pos_zero + left + chunk <= pos_rows",
+  "left + chunk <= 256",
+  "first_query + queries <= 2147483647",
+]
+probes = [
+  { queries = 14, heads = 2, q_stride = 768, first_query = 0, first_key = 0, chunk = 14, left = 56, pos_zero = 13, pos_rows = 83, scale = 0.088 },
+  { queries = 28, heads = 1, q_stride = 384, first_query = 70, first_key = 14, chunk = 14, left = 56, pos_zero = 13, pos_rows = 83, scale = 0.088 },
+  { queries = 5, heads = 1, q_stride = 400, first_query = 3, first_key = 0, chunk = 1, left = 56, pos_zero = 13, pos_rows = 83, scale = 0.088 },
+  { queries = 30, heads = 1, q_stride = 384, first_query = 10, first_key = 0, chunk = 4, left = 56, pos_zero = 13, pos_rows = 83, scale = 0.088 },
+  { queries = 40, heads = 1, q_stride = 384, first_query = 20, first_key = 0, chunk = 28, left = 56, pos_zero = 27, pos_rows = 111, scale = 0.088 },
+  { queries = 0, heads = 1, q_stride = 384, first_query = 0, first_key = 0, chunk = 4, left = 56, pos_zero = 13, pos_rows = 83, scale = 0.088 },
+]
+
+[[launcher]]
+name = "update_key_value_cache"
+cpp = "UpdateKeyValueCacheFlat"
+returns = "void"
+doc = "Keeps the last `keep` key and value rows of `[cache (cached rows) | the pass's rows qkv rows]` in the caches (`capacity` rows of `width`); qkv rows hold keys at column `width`, values at `2 * width`."
+params = [
+  { name = "keys", kind = "inout", elem = "f32", len = "capacity * width" },
+  { name = "values", kind = "inout", elem = "f32", len = "capacity * width" },
+  { name = "qkv", kind = "in", elem = "f32", len = "rows * stride" },
+  { name = "stride", kind = "scalar", type = "i32" },
+  { name = "cached", kind = "scalar", type = "i32" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "keep", kind = "scalar", type = "i32" },
+  { name = "width", kind = "scalar", type = "i32" },
+  { name = "capacity", kind = "scalar", type = "i32" },
+]
+requires = ["width >= 1", "stride >= 3 * width", "cached <= capacity", "keep <= capacity", "keep <= cached + rows"]
+probes = [
+  { stride = 768, cached = 0, rows = 14, keep = 14, width = 256, capacity = 56 },
+  { stride = 768, cached = 56, rows = 14, keep = 56, width = 256, capacity = 56 },
+  { stride = 30, cached = 3, rows = 2, keep = 4, width = 10, capacity = 6 },
+  { stride = 30, cached = 3, rows = 0, keep = 0, width = 10, capacity = 6 },
+]
+
+[[launcher]]
+name = "glu_depthwise"
+cpp = "GluDepthwise"
+returns = "void"
+doc = "The convolution module's GLU and causal depthwise convolution: `in` is `[rows][2 * channels]`, `cache` the GLU of the `kernel - 1` rows before it, `out [rows][channels]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * 2 * channels" },
+  { name = "cache", kind = "in", elem = "f32", len = "(kernel - 1) * channels" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "out", kind = "out", elem = "f32", len = "rows * channels" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "channels", kind = "scalar", type = "i32" },
+  { name = "kernel", kind = "scalar", type = "i32" },
+]
+requires = ["kernel >= 1"]
+probes = [{ rows = 14, channels = 1024, kernel = 9 }, { rows = 2, channels = 3, kernel = 9 }, { rows = 0, channels = 3, kernel = 9 }]
+
+[[launcher]]
+name = "update_conv_cache"
+cpp = "UpdateConvCache"
+returns = "void"
+doc = "Replaces `cache` (`kernel - 1` rows) with the GLU of the last `kernel - 1` rows of `[cache | in]`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * 2 * channels" },
+  { name = "cache", kind = "inout", elem = "f32", len = "(kernel - 1) * channels" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "channels", kind = "scalar", type = "i32" },
+  { name = "kernel", kind = "scalar", type = "i32" },
+]
+# The grid needs a channel.
+requires = ["kernel >= 1", "channels >= 1"]
+probes = [{ rows = 14, channels = 1024, kernel = 9 }, { rows = 2, channels = 3, kernel = 9 }, { rows = 0, channels = 3, kernel = 9 }]
+
+# --- Prediction and joint networks --------------------------------------------
+
+[[launcher]]
+name = "gemv"
+cpp = "Gemv"
+returns = "void"
+doc = "`y[r] = W[r] . concat(x1, x2) + bias[r]` for `rows` float16 rows of `k1 + k2` values (`x2` unread for `k2` 0); an absent bias adds nothing."
+params = [
+  { name = "weight", kind = "in", elem = "f16", len = "rows * (k1 + k2)" },
+  { name = "x1", kind = "in", elem = "f32", len = "k1" },
+  { name = "k1", kind = "scalar", type = "i32" },
+  { name = "x2", kind = "in", elem = "f32", len = "k2" },
+  { name = "k2", kind = "scalar", type = "i32" },
+  { name = "bias", kind = "in", elem = "f32", len = "rows", optional = true },
+  { name = "y", kind = "out", elem = "f32", len = "rows" },
+  { name = "rows", kind = "scalar", type = "i32" },
+]
+# Lanes read eight values at a time (16-byte loads); the grid needs a row.
+requires = ["k1 % 8 == 0", "k2 % 8 == 0", "rows >= 1"]
+probes = [
+  { k1 = 640, k2 = 640, rows = 2560, with = ["bias"] },
+  { k1 = 640, k2 = 0, rows = 640, with = ["bias"] },
+  { k1 = 8, k2 = 16, rows = 3 },
+]
+
+[[launcher]]
+name = "lstm_cell"
+cpp = "LstmCell"
+returns = "void"
+doc = "PyTorch's LSTM cell from gates `[i | f | g | o]` (each `hidden` wide): updates `c` and writes `h`."
+params = [
+  { name = "gates", kind = "in", elem = "f32", len = "4 * hidden" },
+  { name = "h", kind = "out", elem = "f32", len = "hidden" },
+  { name = "c", kind = "inout", elem = "f32", len = "hidden" },
+  { name = "hidden", kind = "scalar", type = "i32" },
+]
+# The grid needs a column.
+requires = ["hidden >= 1"]
+probes = [{ hidden = 640 }, { hidden = 1 }]
+
+[[launcher]]
+name = "joint_input"
+cpp = "JointInput"
+returns = "void"
+doc = "The joint's input: `out[f] = f16(relu(encoder[f] + decoder))` for `frames` rows of `width`."
+params = [
+  { name = "encoder", kind = "in", elem = "f32", len = "frames * width" },
+  { name = "decoder", kind = "in", elem = "f32", len = "width" },
+  { name = "out", kind = "out", elem = "f16", len = "frames * width" },
+  { name = "frames", kind = "scalar", type = "i32" },
+  { name = "width", kind = "scalar", type = "i32" },
+]
+requires = ["frames * width <= 2147483647"]
+probes = [{ frames = 16, width = 640 }, { frames = 1, width = 3 }, { frames = 0, width = 3 }]
+
+[[launcher]]
+name = "argmax_rows"
+cpp = "ArgmaxRowsFlat"
+returns = "void"
+doc = "`best[r]` = the packed arg max of `logits[r] + bias` over `columns`: the order-preserving bits of the value high, `0xFFFFFFFF - column` low (the first column among equals)."
+params = [
+  { name = "logits", kind = "in", elem = "f32", len = "rows * columns" },
+  { name = "bias", kind = "in", elem = "f32", len = "columns" },
+  { name = "rows", kind = "scalar", type = "i32" },
+  { name = "columns", kind = "scalar", type = "i32" },
+  { name = "best", kind = "out", elem = "u64", len = "rows" },
+]
+probes = [{ rows = 16, columns = 13313 }, { rows = 1, columns = 3 }, { rows = 0, columns = 3 }]

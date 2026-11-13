@@ -5,6 +5,11 @@ Notable user-facing changes are recorded here. Versions follow
 
 ## Unreleased
 
+* Nemotron 3.5 ASR Streaming 0.6B (NVIDIA) speech recognition in 40
+  languages through `gufo serve asr`, from the Nemotron ASR extension for
+  Gufo: language detection or a requested language, WAV uploads of any
+  sample rate up to four hours long, text streamed pass by pass, and the
+  realtime WebSocket transcribed after each commit.
 * VoxCPM2 (OpenBMB) text-to-speech in 30 languages through `gufo serve
   tts`, from the VoxCPM extension for Gufo: an automatic voice, voice design
   and style from `instructions`, and cloning with or without a transcript;

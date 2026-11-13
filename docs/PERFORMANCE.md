@@ -3,8 +3,9 @@
 Current speed of rusty-gufo on an AMD Ryzen AI MAX+ 395 with the Radeon
 8060S (`gfx1151`), 128 GiB of memory, ROCm 10.1 and the Balanced power
 profile, measured on an otherwise idle machine: release 0.1.0, and for the
-dense Qwen3.5 and VoxCPM2 the main branch after it (Qwen3.5's faster
-prefill attention and VoxCPM2 are in the [changelog](../CHANGELOG.md)). How the numbers are taken is in
+dense Qwen3.5, VoxCPM2 and Nemotron 3.5 ASR the main branch after it
+(Qwen3.5's faster prefill attention and the two speech models are in the
+[changelog](../CHANGELOG.md)). How the numbers are taken is in
 [benchmarking](development/BENCHMARKING.md); how they compare with Gufo's
 C++ build in [relation to Gufo](development/PARITY.md#performance-against-gufo).
 
@@ -115,6 +116,19 @@ With the LiLiCorr draft, over HTTP:
 Qwen3-ASR 1.7B transcribes a 15.1-second English recording (49 tokens of
 text) in 0.94 s, 16 times faster than real time: 39 ms in the audio
 encoder and 902 ms in the text decoder.
+
+## Nemotron 3.5 ASR
+
+Nemotron 3.5 ASR Streaming 0.6B transcribes uploads at its widest lookahead
+(1.12 s), as JSON over HTTP, timed at the client (median of 10 requests):
+
+| Recording | Whole request | Faster than real time |
+| --- | --- | --- |
+| 10.08 s, English | 25 ms | 403 times |
+| 308.7 s, English and German | 0.56 s | 551 times |
+
+Of the long recording's time, the encoder takes 279 ms, the RNN-T decoder
+163 ms and the log-mel features 79 ms.
 
 ## Qwen3-TTS
 

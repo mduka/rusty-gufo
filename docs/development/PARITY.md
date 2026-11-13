@@ -5,8 +5,8 @@ rusty-gufo is a Rust engine on a common base with
 same hardware. Its host code (engines, server, scheduler, CLI and the HIP
 runtime layer) is a new implementation in Rust; its GPU kernels are the HIP
 sources of Gufo and of the C++ extensions for Gufo that brought Qwen3.6
-35B-A3B, Gemma 4, Nemotron 3.5 Bolt, OmniVoice and VoxCPM2. It does not
-follow Gufo release by release. The C++ builds below stay the references
+35B-A3B, Gemma 4, Nemotron 3.5 Bolt, Nemotron 3.5 ASR, OmniVoice and
+VoxCPM2. It does not follow Gufo release by release. The C++ builds below stay the references
 for inference; everything around inference is free to change.
 
 | Models | Reference |
@@ -16,6 +16,7 @@ for inference; everything around inference is free to change.
 | Nemotron 3.5 Bolt | [gufo-extensions/nemotron](https://github.com/gufo-extensions/nemotron) `62f85dc`, built on Gufo `0e2de43e` |
 | OmniVoice | [gufo-extensions/omnivoice](https://github.com/gufo-extensions/omnivoice) `4bf376c`, built on Gufo `0e2de43e` |
 | VoxCPM2 | [gufo-extensions/voxcpm](https://github.com/gufo-extensions/voxcpm) `0941cd1`, built on Gufo 0.34.0 (`2845939b`) |
+| Nemotron 3.5 ASR Streaming 0.6B | [gufo-extensions/nemotron_asr](https://github.com/gufo-extensions/nemotron_asr) `c256b69` (0.1.2), built on Gufo 0.34.0 (`2845939b`) |
 | Qwen3.6 35B-A3B | [strycast-qwen35moe-gufo-extension](https://github.com/slimsami/strycast-qwen35moe-gufo-extension) `4882b7a`, built on Gufo `0fb50ce4`; for images with its vision gate opened to width 2048 |
 
 1. **Inference stays equivalent.** From the same inputs, every model produces
@@ -40,8 +41,8 @@ for inference; everything around inference is free to change.
    paths. Comments that cite a C++ file (`src/cli/serve/openai_chat.cpp`,
    `tests/cli/http_server_test.cpp`) mean the reference's tree: Gufo v0.28.1,
    where `git show v0.28.1:<path>` in a Gufo clone finds them, or for the
-   Qwen3.6 35B-A3B, Gemma 4, Nemotron, OmniVoice and VoxCPM2 packages the
-   extension at the commit above.
+   Qwen3.6 35B-A3B, Gemma 4, Nemotron, Nemotron 3.5 ASR, OmniVoice and
+   VoxCPM2 packages the extension at the commit above.
 
 ## Differences from Gufo
 
@@ -60,6 +61,8 @@ Against Gufo v0.28.1, for users and contributors alike. Everything not listed be
 | `tune_hipblaslt` and its plan database (`GUFO_HIPBLASLT_PLAN_CACHE`), `gufo-kernel-bench` | Not ported: tools outside `gufo`. Plans are chosen per shape at run time, as Gufo does without a database. |
 | Windows support (Gufo's `src/core/platform` layer, Windows builds and their workflows, Gufo #775, Gufo #805, Gufo #872) | Not ported: Rust uses the standard library and `gufo-hip`, not Gufo's platform layer. |
 | The Nix flake (package, development shell and reference packages), its ROCr queue-memory patch and the Devlab CI workflows | Not ported: Cargo builds the binary against the installed ROCm, the Python tools install from `tools/requirements.txt`, the benchmark references build with `tools/bench/build-reference.sh`, and hosted CI runs the ROCm-free checks. A ROCm built with Gufo's [queue-memory patch](https://github.com/gufo-org/gufo/blob/v0.27.0/.devops/nix/patches/rocr-fixed-cwsr-rocm10.patch) keeps the same protection against queue evictions during host memory compaction. |
+| Live transcription of Gufo 0.34.0's realtime sessions (the Nemotron ASR extension's `LiveTranscription`: English and automatic-detection sessions transcribed while audio arrives, at lookahead 6) | Not ported: the server has no live transcription interface. Realtime sessions are transcribed after each commit, at lookahead 13 ([Nemotron 3.5 ASR](../models/nemotron-3.5-asr/README.md#known-limits)). |
+| FLAC, MP3 and Ogg uploads, and 8-bit, A-law, µ-law and ADPCM WAV, for Nemotron 3.5 ASR (Gufo 0.34.0's symphonia-based audio decoder) | Not ported: the decoder needs the symphonia crate. Such uploads are refused. |
 
 ### Implemented differently
 
@@ -76,6 +79,7 @@ Against Gufo v0.28.1, for users and contributors alike. Everything not listed be
 | Qwen-Image weight upload (Gufo #830) | `gufo_hip::FileUpload` owns each destination buffer from `copy` until `finish` hands it back, so no safe caller can reach memory a reader thread is still filling. The reader count, staging size, queue bound and the overlap of staging and copying are Gufo's `WeightUpload`. |
 | Video embedding input (Gufo #869) | The same FFmpeg libraries, loaded the same way on the first video; `gufo-ffmpeg` reaches struct fields through a C shim built against the build's headers and refuses libraries of another major version, where a mismatch would be undefined behaviour in C++. |
 | Audio embedding input (Gufo #819, Gufo #828) | WAV, FLAC, Ogg Vorbis and MP3 decode in Rust (`hound`, `claxon`, `lewton`, `nanomp3`) and other sample rates resample with `rubato`; Gufo uses libsndfile and libsoxr. PCM WAV and FLAC decode exactly, MP3 and Ogg within 3e-7; resampled inputs differ (a few percent of the signal energy near the new Nyquist frequency for 24 to 48 kHz stereo). From the 16 kHz PCM on, features, encoder and embeddings equal Gufo's bit for bit. |
+| Nemotron 3.5 ASR uploads | WAV through Gufo 0.34.0's strict WAV reader and other sample rates through its resampler, both copied verbatim (`gufo-wav-decode`, `gufo-resample`), mixed to mono as Gufo's `DecodeAudio` mixes; the extension reads WAV through Gufo's symphonia-based decoder. Integer PCM decodes to the same samples, and the HTTP comparison of 16 kHz mono and 48 kHz stereo uploads gave identical responses; the strict reader clamps float samples to [-1, 1]. |
 | Generated-token logprobs (Gufo #814) | Streaming buffer limits count the logprob records at Rust struct sizes, a few bytes apart from C++. Requests that select the unmodified argmax verify in the batched path, which Gufo also uses unless batched verification is off. |
 | DFlash2 prompt features | The 27B target captures prompt features into one pinned buffer per model, which grows to the longest prompt and serves every session; Gufo pins about 400 MiB of host memory per session at startup. |
 | Message text that spells a control token | Tokenized as text by whole message span; Gufo decides per tokenized slice, so a prompt slice that cuts such a span can tokenize differently (and reuse less cache). |

@@ -322,6 +322,7 @@ dependencies = [
  "gufo-hip",
  "gufo-kernel-build",
  "gufo-nemotron",
+ "gufo-nemotron-asr",
  "gufo-omnivoice",
  "gufo-qwen",
  "gufo-qwen-image-21",
@@ -330,8 +331,10 @@ dependencies = [
  "gufo-qwen35",
  "gufo-qwen35moe",
  "gufo-qwen38-flash-next",
+ "gufo-resample",
  "gufo-serve",
  "gufo-voxcpm",
+ "gufo-wav-decode",
  "rustix",
  "serde_json",
  "sha2",
@@ -491,6 +494,25 @@ dependencies = [
  "gufo-nemotron-kernels",
  "sha2",
  "unicode-properties",
+]
+
+[[package]]
+name = "gufo-nemotron-asr"
+version = "0.1.0"
+dependencies = [
+ "gufo-core",
+ "gufo-hip",
+ "gufo-kernel-build",
+ "gufo-nemotron-asr-kernels",
+ "gufo-wav-decode",
+]
+
+[[package]]
+name = "gufo-nemotron-asr-kernels"
+version = "0.1.0"
+dependencies = [
+ "gufo-hip",
+ "gufo-kernel-build",
 ]
 
 [[package]]
@@ -702,6 +724,10 @@ dependencies = [
  "gufo-hip",
  "gufo-kernel-build",
 ]
+
+[[package]]
+name = "gufo-wav-decode"
+version = "0.1.0"
 
 [[package]]
 name = "hashbrown"

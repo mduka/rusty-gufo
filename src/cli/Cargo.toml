@@ -27,6 +27,7 @@ gufo-deepseek-v4-flash = { path = "../models/deepseek_v4_flash" }
 gufo-embedding-gemma2 = { path = "../models/embedding_gemma2" }
 gufo-gemma4 = { path = "../models/gemma4" }
 gufo-nemotron = { path = "../models/nemotron" }
+gufo-nemotron-asr = { path = "../models/nemotron_asr" }
 gufo-omnivoice = { path = "../models/omnivoice" }
 gufo-qwen = { path = "../models/qwen" }
 gufo-qwen35 = { path = "../models/qwen35" }
@@ -36,6 +37,8 @@ gufo-qwen3-asr = { path = "../models/qwen3_asr" }
 gufo-qwen3-tts = { path = "../models/qwen3_tts" }
 gufo-qwen-image-21 = { path = "../models/qwen_image_21" }
 gufo-voxcpm = { path = "../models/voxcpm" }
+gufo-resample.workspace = true
+gufo-wav-decode.workspace = true
 sha2.workspace = true
 chrono.workspace = true
 rustix.workspace = true

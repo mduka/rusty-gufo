@@ -132,9 +132,10 @@ Nemotron 3.5 Bolt trunk; its drafter and projector are found beside it),
 `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` and `Qwen3.6-35B-A3B-Q8_0.gguf`, which the
 `gufo-qwen35moe` fixtures were recorded with, and the 35B's
 `mmproj-BF16.gguf`), `GUFO_OMNIVOICE_MODEL` (the OmniVoice Hugging Face
-directory), and `GUFO_VOXCPM_MODEL`, `GUFO_VOXCPM_GGUF` and
+directory), `GUFO_VOXCPM_MODEL`, `GUFO_VOXCPM_GGUF` and
 `GUFO_VOXCPM_Q8_GGUF` (the VoxCPM2 Hugging Face directory and audio.cpp's
-`voxcpm2-bf16.gguf` and `voxcpm2-q8_0.gguf`). Unset, the
+`voxcpm2-bf16.gguf` and `voxcpm2-q8_0.gguf`), and `GUFO_NEMOTRON_ASR_MODEL`
+(the Nemotron 3.5 ASR Hugging Face directory). Unset, the
 variable's name stands in for the path, so the failure says what to set.
 `GUFO_QWEN35MOE_FIXTURES` names the local Qwen3.6 35B-A3B reference set
 instead (default `target/qwen35moe`). Each model's

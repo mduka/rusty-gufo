@@ -14,6 +14,7 @@ and mind their licenses.
 | Gemma 4 (26B-A4B, 31B, 31B QAT) | Unsloth's GGUFs, MTP drafter, vision sidecar | Text, images → text | [Gemma 4](gemma-4/README.md) |
 | Nemotron 3.5 Bolt 74B-A9B | NVIDIA's 24 GB GGUF (IQ2_XXS, NVFP4, Q8_0), LiLiCorr drafter, vision projector | Text, images → text | [Nemotron 3.5 Bolt](nemotron-3.5-bolt/README.md) |
 | Qwen3-ASR 1.7B | BF16 safetensors | Audio → text | [Qwen3-ASR](qwen3-asr/README.md) |
+| Nemotron 3.5 ASR Streaming 0.6B | float32 safetensors | Audio → text in 40 languages | [Nemotron 3.5 ASR](nemotron-3.5-asr/README.md) |
 | Qwen3-TTS 12Hz 1.7B | BF16 safetensors (CustomVoice, VoiceDesign, Base) | Text, reference audio → speech | [Qwen3-TTS](qwen3-tts/README.md) |
 | OmniVoice | float32 safetensors | Text, reference audio → speech in 646 languages | [OmniVoice](omnivoice/README.md) |
 | VoxCPM2 | BF16 safetensors, or audio.cpp's BF16/Q8_0 GGUF | Text, reference audio → speech in 30 languages | [VoxCPM2](voxcpm2/README.md) |

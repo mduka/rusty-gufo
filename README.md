@@ -15,7 +15,8 @@ rusty-gufo is a Rust engine on a common base with
 hardware. Its engines, server, scheduler, CLI and HIP runtime layer are a
 new implementation in Rust; its GPU kernels are the HIP sources of Gufo and
 of the C++ extensions for Gufo that brought Qwen3.6 35B-A3B, Gemma 4,
-Nemotron 3.5 Bolt, OmniVoice and VoxCPM2. Every model produces the same
+Nemotron 3.5 Bolt, Nemotron 3.5 ASR, OmniVoice and VoxCPM2. Every model
+produces the same
 output tokens as the C++ build it comes from, checked bit for bit, and its
 speed, load time and memory are measured against that build
 ([relation to Gufo](docs/development/PARITY.md)). The binary is still called
@@ -23,8 +24,8 @@ speed, load time and memory are measured against that build
 
 - **Models:** Qwen3.8 27B and the dense Qwen3.5 0.8B to 9B, Qwen3.6 35B-A3B,
   Qwen3.8 Flash-Next, DeepSeek V4 Flash, Gemma 4, Nemotron 3.5 Bolt,
-  Qwen3-ASR, Qwen3-TTS, OmniVoice, VoxCPM2, EmbeddingGemma 2 and
-  Qwen-Image-2.1.
+  Qwen3-ASR, Nemotron 3.5 ASR, Qwen3-TTS, OmniVoice, VoxCPM2,
+  EmbeddingGemma 2 and Qwen-Image-2.1.
 - **Speculative decoding:** DFlash2, MTP, DSpark and LiLiCorr drafters, with
   greedy output identical to decoding without them.
 - **APIs:** OpenAI Chat Completions, Responses, embeddings, audio and images,
@@ -65,6 +66,7 @@ about 88% of its speed. Rules, interfaces and the measurements:
 | Gemma 4 (26B-A4B; 31B and 31B QAT unchecked) | Text, images → text | Autoregressive, MTP | [Gemma 4](docs/models/gemma-4/README.md) |
 | Nemotron 3.5 Bolt 74B-A9B | Text, images → text | Autoregressive, LiLiCorr | [Nemotron 3.5 Bolt](docs/models/nemotron-3.5-bolt/README.md) |
 | Qwen3-ASR 1.7B | Audio → text | Batch and streaming transcription | [Qwen3-ASR](docs/models/qwen3-asr/README.md) |
+| Nemotron 3.5 ASR Streaming 0.6B | Audio → text in 40 languages | Batch and streaming transcription, language detection | [Nemotron 3.5 ASR](docs/models/nemotron-3.5-asr/README.md) |
 | Qwen3-TTS 12Hz 1.7B | Text, reference audio → speech | Custom voices, voice design, cloning | [Qwen3-TTS](docs/models/qwen3-tts/README.md) |
 | OmniVoice | Text, reference audio → speech in 646 languages | Automatic voice, voice design, cloning | [OmniVoice](docs/models/omnivoice/README.md) |
 | VoxCPM2 | Text, reference audio → speech in 30 languages | Automatic voice, voice design, cloning | [VoxCPM2](docs/models/voxcpm2/README.md) |
@@ -229,6 +231,8 @@ The models beyond Gufo v0.28.1 come from C++ extensions for Gufo (MIT):
   [k2-fsa's OmniVoice](https://github.com/k2-fsa/OmniVoice).
 - [VoxCPM](https://github.com/gufo-extensions/voxcpm), for
   [OpenBMB's VoxCPM2](https://github.com/OpenBMB/VoxCPM).
+- [Nemotron ASR](https://github.com/gufo-extensions/nemotron_asr), for
+  NVIDIA's Nemotron 3.5 ASR Streaming 0.6B.
 - [Qwen3.6 35B-A3B](https://github.com/slimsami/strycast-qwen35moe-gufo-extension),
   generated from Sami Slimani's [Strycast](https://github.com/slimsami/strycast),
   for Qwen's Qwen3.6 35B-A3B.

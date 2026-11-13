@@ -17,6 +17,7 @@ to make it faster. How to use a model is on its page under
 | Qwen3-TTS 1.7B | `src/models/qwen3_tts` | Gufo v0.28.1 | [checks](qwen3-tts/CHECKS.md) | [experiments](qwen3-tts/EXPERIMENTS.md) |
 | OmniVoice | `src/models/omnivoice` | gufo-extensions/omnivoice `4bf376c` | [checks](omnivoice/CHECKS.md) | [experiments](omnivoice/EXPERIMENTS.md) |
 | VoxCPM2 | `src/models/voxcpm` | gufo-extensions/voxcpm `0941cd1` | [checks](voxcpm2/CHECKS.md) | [experiments](voxcpm2/EXPERIMENTS.md) |
+| Nemotron 3.5 ASR Streaming 0.6B | `src/models/nemotron_asr` | gufo-extensions/nemotron_asr `c256b69` (0.1.2) | [checks](nemotron-3.5-asr/CHECKS.md) | [experiments](nemotron-3.5-asr/EXPERIMENTS.md) |
 | EmbeddingGemma 2 | `src/models/embedding_gemma2` | Gufo v0.28.1 | [checks](embeddinggemma-2/CHECKS.md) | [experiments](embeddinggemma-2/EXPERIMENTS.md) |
 | Qwen-Image-2.1 | `src/models/qwen_image_21` | Gufo v0.28.1 | [checks](qwen-image-2.1/CHECKS.md) | [experiments](qwen-image-2.1/EXPERIMENTS.md) |
 

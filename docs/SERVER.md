@@ -429,7 +429,7 @@ A text server (`gufo serve llm`) answers:
 | --- | --- | --- |
 | `POST` | `/v1/embeddings` | EmbeddingGemma 2 serving is configured with `gufo serve embedding`.  A text server answers 501, and other servers answer 404 |
 | `POST` | `/embeddings`, `/embedding` | llama.cpp's non-OpenAI embeddings form, on the same `gufo serve embedding` process; other servers answer 404 |
-| `POST` | `/v1/audio/transcriptions` | `gufo serve asr` (Qwen3-ASR) |
+| `POST` | `/v1/audio/transcriptions` | `gufo serve asr` (Qwen3-ASR, Nemotron 3.5 ASR) |
 | `GET` | `/v1/realtime?intent=transcription` | `gufo serve asr`: OpenAI's realtime transcription WebSocket |
 | `POST` | `/v1/audio/speech` | `gufo serve tts` (Qwen3-TTS, OmniVoice, VoxCPM2) |
 | `GET` | `/v1/audio/speech/stream` | `gufo serve tts`: the vLLM-Omni incremental-text WebSocket |
@@ -574,6 +574,16 @@ the same bearer authentication and connection limits as HTTP. Messages are
 bounded to 4 MiB, queued input to 8 MiB/128 messages, and unconsumed output to
 a five-second socket timeout. Native generation observes close/disconnect;
 no per-server streaming flag or extra model is required.
+
+The same command serves [Nemotron 3.5 ASR Streaming 0.6B](models/nemotron-3.5-asr/README.md)
+when `--model` names its Hugging Face directory: model id
+`nemotron-3.5-asr-streaming-0.6b`, the same multipart fields and response
+formats, and the same realtime WebSocket. `language` also takes a locale or
+an English name and may be left out for automatic detection, which
+`verbose_json` reports. Uploads are WAV only (FLAC, MP3 and Ogg are
+refused), up to four hours of audio within `--max-request-bytes`; `prompt`
+and `max_tokens` have no effect and `--context` is unused. Realtime
+utterances are transcribed after the commit, not live.
 
 ## Embeddings
 

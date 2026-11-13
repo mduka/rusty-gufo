@@ -17,9 +17,9 @@ from typing import Dict, List, Set, Tuple
 
 # Each model has a user page and, under docs/development/models, its checks
 # and experiments.
-MODEL_DOCS = ("deepseek-v4-flash", "embeddinggemma-2", "gemma-4", "nemotron-3.5-bolt",
-              "omnivoice", "qwen-image-2.1", "qwen3-asr", "qwen3-tts", "qwen3.5",
-              "qwen3.6-35b-a3b", "qwen3.8-27b", "qwen3.8-flash-next", "voxcpm2")
+MODEL_DOCS = ("deepseek-v4-flash", "embeddinggemma-2", "gemma-4", "nemotron-3.5-asr",
+              "nemotron-3.5-bolt", "omnivoice", "qwen-image-2.1", "qwen3-asr", "qwen3-tts",
+              "qwen3.5", "qwen3.6-35b-a3b", "qwen3.8-27b", "qwen3.8-flash-next", "voxcpm2")
 
 REQUIRED_DOC_FILES = [
     "README.md",
