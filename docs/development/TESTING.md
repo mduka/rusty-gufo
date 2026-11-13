@@ -44,7 +44,7 @@ tests/models/deepseek_v4_flash/run_operator_checks.sh   # DeepSeek kernel operat
   (`tools/ci/check-format.py`, with the formatter pinned in
   `tools/ci/requirements.txt`; `--fix` applies it);
 - the unsafe policy (`tools/ci/check-unsafe.py`);
-- the tool tests under `tests/tools/` (A/B harness, gate scope and
+- the tool tests under `tests/tools/` (A/B harness, gate scope, runner and
   durations, kernel resources, documentation and dependency checks,
   profiler, serving benchmark, speculative corpus, DeepSeek dataset
   provenance) and the CLI parser test (`tests/cli/serve_test.py`);
@@ -76,7 +76,14 @@ which saves a rerun of everything after a rebase or after squashing commits.
 `tools/ci/gate-at.sh <rev> [options]` checks out `<rev>` into a worktree of its
 own (`target/gate-worktree`, with its own target directory) and runs the
 gate there, so a long run checks exactly that revision while the checkout
-moves on.
+moves on. There each test binary that passes is recorded for the revision
+(`target/gate-passed/<commit>.tsv` in the worktree: the binary's SHA-256,
+package, name and arguments), and a later run at the same revision keeps the
+recorded binaries whose contents are unchanged: a run stopped at the end of
+a window resumes with the binaries it had not finished, and its summary
+counts those it kept. Delete the record for a run from the start. The
+working tree's own gate keeps no record, since it cannot tell uncommitted
+inputs apart.
 
 ### Hosted CI
 

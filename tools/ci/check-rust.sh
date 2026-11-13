@@ -64,10 +64,18 @@ cargo fmt --all --check
 step "clippy with GPU features (warnings are errors)"
 cargo gpu-clippy --quiet -- -D warnings
 
-# Every test binary runs through tools/ci/gate_runner.sh, which times it.
+# Every test binary runs through tools/ci/gate_runner.sh, which times it and,
+# under tools/ci/gate-at.sh, keeps the binaries that passed at this revision in
+# an earlier run ($GUFO_GATE_PASSED).
 mkdir -p target
 : >"$times"
 runner=$PWD/tools/ci/gate_runner.sh
+export GUFO_GATE_KEPT=$PWD/target/gate-kept.tsv
+: >"$GUFO_GATE_KEPT"
+if [ -n "${GUFO_GATE_PASSED:-}" ] && [ -s "$GUFO_GATE_PASSED" ]; then
+  printf '\nresuming: %s test binaries passed in earlier runs at this revision (%s)\n' \
+    "$(wc -l <"$GUFO_GATE_PASSED")" "$GUFO_GATE_PASSED"
+fi
 if [ "$full" = 1 ]; then
   step "tests with GPU features${without#,}"
   env -u GUFO_GATE_PACKAGES GUFO_GATE_SKIP_LONG=$skip_long GUFO_GATE_TIMES="$times" \
@@ -105,11 +113,11 @@ python3 tools/ci/check-format.py
 step "unsafe policy"
 python3 tools/ci/check-unsafe.py
 
-step "tool tests (A/B harness, gate scope and durations, kernel resources, docs and dependency checks, profiler, serving bench, corpus, DS4 dataset, CLI parser)"
+step "tool tests (A/B harness, gate scope, runner and durations, kernel resources, docs and dependency checks, profiler, serving bench, corpus, DS4 dataset, CLI parser)"
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 for test in tests/tools/ab_test.py tests/tools/gate_scope_test.py \
-  tests/tools/gate_durations_test.py \
+  tests/tools/gate_runner_test.py tests/tools/gate_durations_test.py \
   tests/tools/kernel_resources_test.py tests/tools/check_docs_test.py \
   tests/tools/check_dependencies_test.py; do
   if ! PYTHONDONTWRITEBYTECODE=1 python3 "$test" >"$log" 2>&1; then
@@ -162,6 +170,10 @@ slow=$(awk -F '\t' -v limit="$GUFO_GATE_LONG_SECONDS" '$1 > limit' "$times" | so
 if [ -n "$slow" ]; then
   printf 'Test binaries over %ss (seconds, package, binary):\n%s\n' \
     "$GUFO_GATE_LONG_SECONDS" "$slow"
+fi
+if [ -s "$GUFO_GATE_KEPT" ]; then
+  printf 'Test binaries kept from earlier runs at this revision: %s\n' \
+    "$(wc -l <"$GUFO_GATE_KEPT")"
 fi
 if [ "$full" = 1 ]; then
   printf '\nPASS: Rust workspace checks (full%s)\n' "$without"

@@ -9,6 +9,12 @@
 # later runs build on incrementally. The untracked inputs the tests read from
 # target/ (flash-next, qwen-mtp, image-ref, qwen35moe; docs/development/TESTING.md) are
 # linked into it.
+#
+# Each test binary that passes is recorded for the revision (in the worktree's
+# target/gate-passed/<commit>.tsv, through tools/ci/gate_runner.sh), and a
+# later run at the same revision keeps those whose contents are unchanged: a
+# run stopped at the end of a window resumes where it stopped. Delete the file
+# for a run from the start.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 rev=${1:?usage: tools/ci/gate-at.sh REV [check-rust.sh options]}
@@ -28,6 +34,11 @@ for input in flash-next qwen-mtp image-ref qwen35moe; do
     ln -sfn "$(readlink -f "target/$input")" "$tree/target/$input"
   fi
 done
+
+passed=$tree/target/gate-passed
+mkdir -p "$passed"
+find "$passed" -type f ! -name "$commit.tsv" -delete
+export GUFO_GATE_PASSED=$passed/$commit.tsv
 
 printf 'gate at %s (%s)\n' "$rev" "$commit"
 cd "$tree"
