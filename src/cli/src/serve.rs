@@ -1,8 +1,9 @@
 //! `gufo serve`, after parsing (`RunServe` of the C++ server): loads the
 //! modality's model, builds its service and runs the HTTP server. Dense
 //! Qwen3.8, Qwen3.6 35B-A3B, Qwen3.8-Flash-Next, DeepSeek V4 Flash, Nemotron
-//! 3.5 Bolt and Gemma 4 (text) run under the pool and scheduler; ASR, TTS,
-//! image and embeddings have their own services.
+//! 3.5 Bolt and Gemma 4 (text) run under the pool and scheduler; ASR, TTS
+//! (Qwen3-TTS, OmniVoice, VoxCPM2), image and embeddings have their own
+//! services.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -30,8 +31,10 @@ use gufo_serve::image_api::{
 use gufo_serve::logging;
 use gufo_serve::pool::{TextRunnerDiskCacheOptions, TextRunnerPool};
 use gufo_serve::scheduled_backend::ScheduledBackend;
-use gufo_serve::tts_model::{ModelVariant as TtsVariant, SynthesisResult as TtsResult, TtsRunner};
-use gufo_serve::tts_service::{TtsService, TtsServiceOptions};
+use gufo_serve::tts_model::{
+    ConditioningCapabilities, ModelVariant as TtsVariant, SynthesisResult as TtsResult, TtsRunner,
+};
+use gufo_serve::tts_service::{TtsRuntimeFactory, TtsService, TtsServiceOptions};
 
 use crate::gpu_queues::{
     QueueProfile, describe_queue_plan, describe_queue_pressure, plan_queues, query_queue_census,
@@ -40,6 +43,7 @@ use crate::serve_cli::{self, LlmOptions, Modality, ServeParse, SpeechOptions};
 
 mod embedding;
 mod omnivoice;
+mod voxcpm;
 
 /// `ModelLoadLog`: start, completion or failure of a model load.
 struct ModelLoadLog {
@@ -431,6 +435,18 @@ impl ImageCodec for QwenImageCodec {
     }
 }
 
+/// A speech model of the extensions (OmniVoice: a directory; VoxCPM2: a
+/// directory or an audio.cpp GGUF file): an automatic voice and voice
+/// design besides cloning, on its own runtime instead of Qwen3-TTS's.
+struct NativeTts {
+    name: &'static str,
+    model_id: &'static str,
+    sample_rate: std::result::Result<u32, String>,
+    conditioning: ConditioningCapabilities,
+    voices: [&'static str; 2],
+    factory: TtsRuntimeFactory,
+}
+
 fn load_tts(
     options: &SpeechOptions,
     playback: Option<Arc<PlaybackBuffer>>,
@@ -443,16 +459,37 @@ fn load_tts(
             return Err(2);
         }
     };
-    let service = if omnivoice::probe(&options.model) {
-        let sample_rate = match omnivoice::sample_rate(&options.model) {
+    let native = if omnivoice::probe(&options.model) {
+        Some(NativeTts {
+            name: "OmniVoice",
+            model_id: omnivoice::MODEL_ID,
+            sample_rate: omnivoice::sample_rate(&options.model),
+            conditioning: omnivoice::conditioning(),
+            voices: [omnivoice::AUTO_VOICE, omnivoice::DESIGN_VOICE],
+            factory: Box::new(|root: &Path, _, _| omnivoice::runtime(root)),
+        })
+    } else if voxcpm::probe(&options.model) {
+        Some(NativeTts {
+            name: "VoxCPM2",
+            model_id: voxcpm::MODEL_ID,
+            sample_rate: voxcpm::sample_rate(&options.model),
+            conditioning: voxcpm::conditioning(),
+            voices: [voxcpm::AUTO_VOICE, voxcpm::DESIGN_VOICE],
+            factory: Box::new(|root: &Path, _, _| voxcpm::runtime(root)),
+        })
+    } else {
+        None
+    };
+    let service = if let Some(native) = native {
+        let sample_rate = match native.sample_rate {
             Ok(rate) => rate,
             Err(error) => {
-                eprintln!("Error enabling OmniVoice TTS service: {error}");
+                eprintln!("Error enabling {} TTS service: {error}", native.name);
                 return Err(1);
             }
         };
         let model_id = if options.served_model_name.is_empty() {
-            omnivoice::MODEL_ID.to_string()
+            native.model_id.to_string()
         } else {
             options.served_model_name.clone()
         };
@@ -462,14 +499,11 @@ fn load_tts(
             validate_model: false,
             sample_rate,
             variant: TtsVariant::Base,
-            conditioning: Some(omnivoice::conditioning()),
+            conditioning: Some(native.conditioning),
             model_id,
-            voices: vec![
-                omnivoice::AUTO_VOICE.to_string(),
-                omnivoice::DESIGN_VOICE.to_string(),
-            ],
+            voices: native.voices.map(str::to_string).to_vec(),
             voice_presets,
-            runtime_factory: Some(Box::new(|root: &Path, _, _| omnivoice::runtime(root))),
+            runtime_factory: Some(native.factory),
             playback,
             ..TtsServiceOptions::default()
         })

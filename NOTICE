@@ -28,6 +28,9 @@ Adapted code includes:
   them OmniVoice (Apache-2.0), Hugging Face transformers (Apache-2.0), pydub
   (MIT), torchaudio (BSD-2-Clause), NVIDIA's Nemotron-H Omni model code
   (Apache-2.0) and PyTorch (BSD-3-Clause).
+- The VoxCPM extension for Gufo (MIT), and through it VoxCPM (Apache-2.0,
+  Copyright OpenBMB), DAC (MIT, Copyright (c) 2023-present, Descript) and
+  CosyVoice (Apache-2.0, Copyright (c) 2024 Alibaba Inc).
 
 Strix Halo optimization inspiration also came from these MIT-licensed projects:
 - LaurentZuijdwijk/llama.cpp: https://github.com/LaurentZuijdwijk/llama.cpp

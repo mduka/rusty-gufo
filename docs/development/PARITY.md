@@ -5,8 +5,8 @@ rusty-gufo is a Rust engine on a common base with
 same hardware. Its host code (engines, server, scheduler, CLI and the HIP
 runtime layer) is a new implementation in Rust; its GPU kernels are the HIP
 sources of Gufo and of the C++ extensions for Gufo that brought Qwen3.6
-35B-A3B, Gemma 4, Nemotron 3.5 Bolt and OmniVoice. It does not follow Gufo
-release by release. The C++ builds below stay the references
+35B-A3B, Gemma 4, Nemotron 3.5 Bolt, OmniVoice and VoxCPM2. It does not
+follow Gufo release by release. The C++ builds below stay the references
 for inference; everything around inference is free to change.
 
 | Models | Reference |
@@ -15,6 +15,7 @@ for inference; everything around inference is free to change.
 | Gemma 4 | [gemma4-gufo-extension](https://github.com/franzmoca/gemma4-gufo-extension) `a31ce42`, built on Gufo `0e2de43e` |
 | Nemotron 3.5 Bolt | [gufo-extensions/nemotron](https://github.com/gufo-extensions/nemotron) `62f85dc`, built on Gufo `0e2de43e` |
 | OmniVoice | [gufo-extensions/omnivoice](https://github.com/gufo-extensions/omnivoice) `4bf376c`, built on Gufo `0e2de43e` |
+| VoxCPM2 | [gufo-extensions/voxcpm](https://github.com/gufo-extensions/voxcpm) `0941cd1`, built on Gufo 0.34.0 (`2845939b`) |
 | Qwen3.6 35B-A3B | [strycast-qwen35moe-gufo-extension](https://github.com/slimsami/strycast-qwen35moe-gufo-extension) `4882b7a`, built on Gufo `0fb50ce4`; for images with its vision gate opened to width 2048 |
 
 1. **Inference stays equivalent.** From the same inputs, every model produces
@@ -39,8 +40,8 @@ for inference; everything around inference is free to change.
    paths. Comments that cite a C++ file (`src/cli/serve/openai_chat.cpp`,
    `tests/cli/http_server_test.cpp`) mean the reference's tree: Gufo v0.28.1,
    where `git show v0.28.1:<path>` in a Gufo clone finds them, or for the
-   Gemma 4, Nemotron and OmniVoice packages the extension at the commit
-   above.
+   Qwen3.6 35B-A3B, Gemma 4, Nemotron, OmniVoice and VoxCPM2 packages the
+   extension at the commit above.
 
 ## Differences from Gufo
 

@@ -431,7 +431,7 @@ A text server (`gufo serve llm`) answers:
 | `POST` | `/embeddings`, `/embedding` | llama.cpp's non-OpenAI embeddings form, on the same `gufo serve embedding` process; other servers answer 404 |
 | `POST` | `/v1/audio/transcriptions` | `gufo serve asr` (Qwen3-ASR) |
 | `GET` | `/v1/realtime?intent=transcription` | `gufo serve asr`: OpenAI's realtime transcription WebSocket |
-| `POST` | `/v1/audio/speech` | `gufo serve tts` (Qwen3-TTS, OmniVoice) |
+| `POST` | `/v1/audio/speech` | `gufo serve tts` (Qwen3-TTS, OmniVoice, VoxCPM2) |
 | `GET` | `/v1/audio/speech/stream` | `gufo serve tts`: the vLLM-Omni incremental-text WebSocket |
 | `GET` | `/v1/audio/voices` | `gufo serve tts`: the voices a request may name |
 | `POST` | `/v1/images/generations`, `/v1/images/edits` | `gufo serve image` (Qwen-Image-2.1) |
@@ -466,7 +466,11 @@ API URL should offer both synthesis and transcription.
 An [OmniVoice](models/omnivoice/README.md) model directory serves through the
 same command: model id `omnivoice`, voices `auto` and `voice-design` plus any
 presets, an automatic voice when a request names no voice, and optional
-`instructions` and reference audio.
+`instructions` and reference audio. So does [VoxCPM2](models/voxcpm2/README.md),
+from its model directory or an audio.cpp GGUF file: model id `voxcpm2`, the
+same voices and conditioning, and cloning with or without a transcript
+(`voice_clone_mode: speaker_embedding_only` conditions on the recording
+alone).
 
 The service checks requests against what the loaded model supports (its TTS
 conditioning capabilities): whether synthesis without a reference is
@@ -525,18 +529,20 @@ return several minutes of unusable audio. Preset names join
 also send `reference_audio`, `reference_text`, or `voice_clone_mode` --- the
 preset already supplies them. Presets require a Base checkpoint; CustomVoice
 selects a trained embedding and VoiceDesign is driven by `instructions`, so
-neither has anything to apply them to. OmniVoice accepts presets as well.
+neither has anything to apply them to. OmniVoice and VoxCPM2 accept presets
+as well.
 
 `POST /v1/audio/speech` accepts `model`, `input`, `voice`, `response_format`,
 `speed`, `language`, `instructions`, `seed`, `max_new_tokens`, `greedy`,
 `stream_format`, talker `temperature`/`top_k`/`top_p`/`repetition_penalty`, and
 predictor `subtalker_dosample`/`subtalker_temperature`/`subtalker_top_k`/`subtalker_top_p`.
-Base and OmniVoice additionally accept `reference_audio`, `reference_text`, `voice_clone_mode`.
+Base, OmniVoice and VoxCPM2 additionally accept `reference_audio`, `reference_text`, `voice_clone_mode`.
 Unknown fields are rejected. `response_format` supports buffered `wav` and
 streaming `pcm`; `stream_format: "sse"` emits OpenAI audio events with base64
 PCM. `speed` supports `1.0` only; input is capped at 16384 UTF-8 bytes and
 `max_new_tokens` at 8192 (default 3000). Output is mono 16-bit PCM at the
-model's sample rate (24 kHz for both models), which the WebSocket's
+model's sample rate (24 kHz for Qwen3-TTS and OmniVoice, 48 kHz for
+VoxCPM2), which the WebSocket's
 `audio.start` events report.
 
 `GET /v1/audio/speech/stream` upgrades to the vLLM-Omni incremental-text

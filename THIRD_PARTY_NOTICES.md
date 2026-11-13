@@ -44,6 +44,10 @@ the notices of the versions they actually ship.
 | Hugging Face transformers | The OmniVoice audio tokenizer's encoder and decoder (HiggsAudioV2Tokenizer, DAC, HuBERT) and the generator's Qwen3 layers, through the OmniVoice extension | `Apache-2.0` | `5.22.2` | [huggingface/transformers](https://github.com/huggingface/transformers) |
 | pydub | Silence detection and removal reproduced in OmniVoice's audio processing | `MIT` | `0.25.1` | [jiaaro/pydub](https://github.com/jiaaro/pydub) |
 | torchaudio | Sinc resampler reproduced in OmniVoice's audio processing | `BSD-2-Clause` | `2.11.1` | [pytorch/audio](https://github.com/pytorch/audio) |
+| VoxCPM extension for Gufo | Ported to Rust (`src/models/voxcpm`); its HIP kernels compiled in | `MIT` | `0941cd1` | [gufo-extensions/voxcpm](https://github.com/gufo-extensions/voxcpm) |
+| VoxCPM | VoxCPM2Model's MiniCPM4 stacks, local encoder, local DiT and CFM sampler, AudioVAE V2, the prompt construction, stop and retry rules, and the tokenizer's split of multi-character Chinese tokens, through the VoxCPM extension | `Apache-2.0` | `300e4260b509066151d623dc9c0aa922cf82232b` | [OpenBMB/VoxCPM](https://github.com/OpenBMB/VoxCPM) |
+| DAC | The convolution blocks and Snake activation of VoxCPM's AudioVAE V2, which VoxCPM bases on DAC, through the VoxCPM extension | `MIT` | `c7cfc5d2647e26471dc394f95846a0830e7bec34` | [descriptinc/descript-audio-codec](https://github.com/descriptinc/descript-audio-codec) |
+| CosyVoice | Flow matching of VoxCPM's local DiT, which VoxCPM credits to CosyVoice, through the VoxCPM extension | `Apache-2.0` | `074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc` | [FunAudioLLM/CosyVoice](https://github.com/FunAudioLLM/CosyVoice) |
 | Gemma 4 extension for Gufo (Francesco Moca) | Ported to Rust (`src/models/gemma4`); its HIP kernels compiled in, among them its copies of Gufo's GGML and binary16 kernels | `MIT` | `a31ce42` | [franzmoca/gemma4-gufo-extension](https://github.com/franzmoca/gemma4-gufo-extension) |
 | Qwen3.6 35B-A3B extension for Gufo (Strycast) | Ported to Rust (`src/models/qwen35moe`); its HIP kernels compiled in, among them its copies of Gufo's Qwen kernels and, through Flash-Next's copies, llama.cpp's quantized matrix kernels (`src/models/qwen35moe/kernels/vendor`) | `MIT` | `4882b7a` (Strycast `8c946372`) | [slimsami/strycast-qwen35moe-gufo-extension](https://github.com/slimsami/strycast-qwen35moe-gufo-extension) |
 | Nemotron extension for Gufo | Ported to Rust (`src/models/nemotron`); its HIP kernels compiled in, among them llama.cpp's quantized matrix kernels through Gufo's and DS4's copies (`src/models/nemotron/kernels/rocm/mmq/VENDOR.md`) | `MIT` | `62f85dc` | [gufo-extensions/nemotron](https://github.com/gufo-extensions/nemotron) |
@@ -53,6 +57,10 @@ the notices of the versions they actually ship.
 The OmniVoice rows' license texts are `licenses/omnivoice-extension.txt`,
 `licenses/OmniVoice.txt`, `licenses/transformers.txt`, `licenses/pydub.txt`
 and `licenses/torchaudio.txt`.
+The VoxCPM2 rows' license texts are `licenses/voxcpm-extension.txt`,
+`licenses/VoxCPM.txt`, `licenses/DAC.txt` and `licenses/CosyVoice.txt`; the
+parts the extension adapted from Gufo (its safetensors reader and hipBLASLt
+plan cache) keep Gufo's MIT license (`LICENSE-MIT`).
 The Gemma 4 row's license text is `licenses/gemma4-extension.txt`; the parts
 it copied from Gufo keep Gufo's MIT license (`LICENSE-MIT`).
 The Qwen3.6 35B-A3B row's license text is `licenses/qwen35moe-extension.txt`;
@@ -220,6 +228,21 @@ responsible for the terms governing their location and use.
   rusty-gufo neither ships nor automatically downloads these weights.
 - **Reference implementation**: k2-fsa/OmniVoice's Python package
   (Apache-2.0) with transformers (Apache-2.0); development-only.
+
+### VoxCPM2
+
+- **Artifact**: [openbmb/VoxCPM2](https://huggingface.co/openbmb/VoxCPM2) at
+  `7936080b41163874f38610f46f438e2c0757f9fd`, the Hugging Face directory with
+  bfloat16 safetensors, the float32 AudioVAE checkpoint, a tokenizer and the
+  configuration; or audio.cpp's GGUF conversions of it
+  ([audio-cpp/audio.cpp-gguf](https://huggingface.co/audio-cpp/audio.cpp-gguf)
+  at `73ce4162f6cce370dd533c6782b772135c1b2a8e`, `VoxCPM2-GGUF/`).
+- **License**: Apache-2.0, as OpenBMB's model card declares; audio.cpp's
+  repository publishes its conversions under its own terms. rusty-gufo
+  neither ships nor automatically downloads these weights.
+- **Reference implementation**: OpenBMB's VoxCPM Python package
+  (Apache-2.0) at `300e4260b509066151d623dc9c0aa922cf82232b`;
+  development-only.
 
 ### Qwen-Image-2.1
 

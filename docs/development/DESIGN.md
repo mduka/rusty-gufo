@@ -74,10 +74,12 @@ tiers take the caller's scratch (Flash-Next) and the engine's own stream
 
 The models are `qwen35` (the `qwen35` architecture: Qwen3.8 27B and the
 dense Qwen3.5 family), `qwen38_flash_next`, `deepseek_v4_flash`,
-`qwen3_asr`, `qwen3_tts`, `qwen_image_21`, `embedding_gemma2`, `gemma4`,
-`nemotron` (Nemotron 3.5 Bolt) and `omnivoice`. `qwen` holds what the Qwen
-language models share: the chat template, the vision encoder and the kernel
-crate over Gufo's `src/models/qwen` HIP sources, which stay at Gufo's paths.
+`qwen35moe` (Qwen3.6 35B-A3B), `qwen3_asr`, `qwen3_tts`, `qwen_image_21`,
+`embedding_gemma2`, `gemma4`, `nemotron` (Nemotron 3.5 Bolt), `omnivoice`
+and `voxcpm` (VoxCPM2). `qwen`
+holds what the Qwen language models share: the chat template, the vision
+encoder and the kernel crate over Gufo's `src/models/qwen` HIP sources,
+which stay at Gufo's paths.
 Model code, kernels, tests and numerical contracts stay together, and no
 model calls another model's kernels (the Qwen language models share
 `gufo-qwen-kernels`), so a kernel change cannot alter another model's output

@@ -5,6 +5,7 @@ members = [
   "src/cli/kernels",
   "src/cli/serve",
   "src/core",
+  "src/core/resample",
   "src/eval",
   "src/ffmpeg",
   "src/formats",
@@ -34,6 +35,8 @@ members = [
   "src/models/qwen3_tts/kernels",
   "src/models/qwen_image_21",
   "src/models/qwen_image_21/kernels",
+  "src/models/voxcpm",
+  "src/models/voxcpm/kernels",
 ]
 
 [workspace.package]
@@ -45,6 +48,8 @@ publish = false
 [workspace.dependencies]
 gufo-cli-kernels = { path = "src/cli/kernels" }
 gufo-core = { path = "src/core" }
+# Gufo 0.34.0's resampler (soxr HQ response), verbatim: VoxCPM2 references.
+gufo-resample = { path = "src/core/resample" }
 gufo-deepseek-v4-flash-kernels = { path = "src/models/deepseek_v4_flash/kernels" }
 gufo-eval = { path = "src/eval" }
 gufo-ffmpeg = { path = "src/ffmpeg" }

@@ -1,0 +1,655 @@
+# Kernel contract for the VoxCPM2 kernels (docs/development/DESIGN.md).
+# Extents are element counts (bytes for `u8`); the C++ launcher takes
+# `hipStream_t` last. Trusted base: a wrong extent compiles and lets a kernel
+# overrun its buffer. Review changes like unsafe code; every launcher needs
+# probes (tests/extents.rs).
+#
+# The kernels are the VoxCPM extension's (gufo-extensions/voxcpm 0941cd1,
+# kernels/), copied verbatim into ../hip. bfloat16 travels as raw
+# `std::uint16_t` bits there, float16 too (the GGUF conversion's input).
+# Launchers whose C++ signature the contract cannot describe directly (the
+# matrix-core products' plan and scratch structs) go through adapters.hip.
+
+[library]
+name = "voxcpm"
+root = "../../../.."
+namespace = "gufo::models::voxcpm::kernels"
+f16_type = "std::uint16_t"
+bf16_type = "std::uint16_t"
+headers = [
+  "src/models/voxcpm/hip/convert_kernels.hpp",
+  "src/models/voxcpm/hip/generator_kernels.hpp",
+  "src/models/voxcpm/hip/skinny_gemm.hpp",
+  "src/models/voxcpm/hip/vae_kernels.hpp",
+  "src/models/voxcpm/hip/wmma_products.hpp",
+  "src/models/voxcpm/kernels/adapters.hpp",
+]
+
+# The extension's gufo_voxcpm_hip target: the preset's -O2, then -O3 from its
+# own options (extension.cmake).
+[[source]]
+path = "src/models/voxcpm/hip/generator_kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/voxcpm/hip/vae_kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/voxcpm/hip/skinny_gemm.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/voxcpm/hip/wmma_products.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+[[source]]
+path = "src/models/voxcpm/hip/convert_kernels.hip"
+flags = ["-O3", "-Wno-unused-command-line-argument"]
+
+# Host code only: the flat forms of the matrix-core products.
+[[source]]
+path = "src/models/voxcpm/kernels/adapters.hip"
+
+# --- Load-time conversions (convert_kernels.hpp) -----------------------------
+
+[[launcher]]
+name = "half_to_bf16"
+cpp = "HalfToBf16"
+returns = "void"
+doc = "`output[i] = bf16(input[i])` for float16 input."
+params = [
+  { name = "input", kind = "in", elem = "f16", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }, { count = 0 }]
+
+[[launcher]]
+name = "float_to_bf16"
+cpp = "FloatToBf16"
+returns = "void"
+doc = "`output[i] = bf16(input[i])`, rounded to nearest even."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 1000 }, { count = 1 }, { count = 0 }]
+
+[[launcher]]
+name = "q8_0_to_bf16"
+cpp = "Q8_0ToBf16"
+returns = "void"
+doc = "Dequantizes GGML Q8_0 blocks (a float16 scale and 32 int8 values, 34 bytes) to bfloat16: `output[i] = bf16(scale * value)`."
+params = [
+  { name = "blocks", kind = "in", elem = "u8", len = "(count + 31) / 32 * 34" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+]
+probes = [{ count = 2048 }, { count = 33 }, { count = 0 }]
+
+# --- Weight tiles of the matrix-core products (wmma_products.hpp) -----------
+# A tile holds 16 weight rows and 32 columns: Q8_0 544 bytes (512 values and
+# 16 float16 scales), bfloat16 512 values; rows beyond the matrix are zero.
+
+[[launcher]]
+name = "q8_0_to_tiles"
+cpp = "Q8_0ToTiles"
+returns = "void"
+doc = "Repacks GGML Q8_0 blocks `[rows][columns / 32]` into tiles; `output` must already be zero beyond the last row's tile rows."
+params = [
+  { name = "blocks", kind = "in", elem = "u8", len = "rows * (columns / 32) * 34" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "output", kind = "inout", elem = "u8", len = "(rows + 15) / 16 * (columns / 32) * 544" },
+]
+# The kernel indexes with int.
+requires = ["columns % 32 == 0", "rows * columns <= 2147483647"]
+probes = [{ rows = 40, columns = 96 }, { rows = 16, columns = 32 }, { rows = 1, columns = 2048 }]
+
+[[launcher]]
+name = "bf16_to_tiles"
+cpp = "Bf16ToTiles"
+returns = "void"
+doc = "Repacks bfloat16 `[rows][columns]` into tiles; `output` must already be zero beyond the last row's tile rows."
+params = [
+  { name = "weights", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "output", kind = "inout", elem = "bf16", len = "(rows + 15) / 16 * (columns / 32) * 512" },
+]
+requires = ["columns % 32 == 0", "rows * columns <= 2147483647"]
+probes = [{ rows = 40, columns = 96 }, { rows = 16, columns = 32 }, { rows = 1, columns = 2048 }]
+
+[[launcher]]
+name = "q8_tiles_to_bf16"
+cpp = "Q8TilesToBf16"
+returns = "void"
+doc = "Dequantizes Q8_0 tiles to bfloat16 `[rows][columns]`: `bf16(scale * q)`, the rounding of a conversion at load (products of more than 128 rows)."
+params = [
+  { name = "tiles", kind = "in", elem = "u8", len = "(rows + 15) / 16 * (columns / 32) * 544" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+]
+requires = ["columns % 32 == 0", "rows * columns <= 2147483647"]
+probes = [{ rows = 40, columns = 96 }, { rows = 16, columns = 32 }, { rows = 1, columns = 2048 }]
+
+[[launcher]]
+name = "bf16_tiles_to_rows"
+cpp = "Bf16TilesToRows"
+returns = "void"
+doc = "Unpacks bfloat16 tiles to `[rows][columns]`."
+params = [
+  { name = "tiles", kind = "in", elem = "bf16", len = "(rows + 15) / 16 * (columns / 32) * 512" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * columns" },
+]
+requires = ["columns % 32 == 0", "rows * columns <= 2147483647"]
+probes = [{ rows = 40, columns = 96 }, { rows = 16, columns = 32 }, { rows = 1, columns = 2048 }]
+
+# --- Products (skinny_gemm.hpp, wmma_products.hpp via adapters.hip) ----------
+
+[[launcher]]
+name = "skinny_gemm"
+cpp = "SkinnyGemmChecked"
+returns = "supported"
+doc = "`y[rows][out] (+)= x[rows][columns] W^T` for bfloat16 x and W (`[out][columns]`) with float32 sums, every weight read once (`SkinnyGemm`). Unsupported for more than 32 rows or `columns` not a multiple of 8, and for the shapes adapters.hip refuses."
+params = [
+  { name = "x", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "w", kind = "in", elem = "bf16", len = "out * columns" },
+  { name = "y", kind = "inout", elem = "f32", len = "rows * out" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "out", kind = "scalar", type = "usize" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+]
+# The kernels index with int and clamp the weight row to `out - 1`.
+requires = ["out >= 1", "rows * columns <= 2147483647", "out * columns <= 2147483647"]
+probes = [
+  { rows = 1, columns = 2048, out = 37, accumulate = false },
+  { rows = 4, columns = 6144, out = 20, accumulate = true },
+  { rows = 8, columns = 1000, out = 9, accumulate = false },
+  { rows = 11, columns = 2048, out = 17, accumulate = true },
+  { rows = 22, columns = 1024, out = 3, accumulate = false },
+  { rows = 32, columns = 4096, out = 9, accumulate = false },
+  { rows = 9, columns = 8192, out = 5, accumulate = false },
+]
+
+[[launcher]]
+name = "wmma_q8"
+cpp = "WmmaQ8Flat"
+returns = "supported"
+doc = "`y[rows][out] (+)= x[rows][columns] W^T` for bfloat16 x and Q8_0 tiles W on the matrix cores (`WmmaQ8`), split over `splits` waves of `blocks_per_split` 32-column blocks each (`PlanWmma`). The split scratch (partials, counters zero between products) may be absent for one split. Unsupported (nothing launched) for 0 or more than 32 rows, `columns` not a multiple of 32, a plan that does not cover the reduction or scratch smaller than the plan needs."
+params = [
+  { name = "x", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "w", kind = "in", elem = "u8", len = "(out + 15) / 16 * (columns / 32) * 544" },
+  { name = "y", kind = "inout", elem = "f32", len = "rows * out" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "out", kind = "scalar", type = "usize" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "splits", kind = "scalar", type = "usize" },
+  { name = "blocks_per_split", kind = "scalar", type = "usize" },
+  { name = "partials", kind = "inout", elem = "f32", len = "partial_floats", optional = true },
+  { name = "partial_floats", kind = "scalar", type = "usize" },
+  { name = "counters", kind = "inout", elem = "u32", len = "counter_count", optional = true },
+  { name = "counter_count", kind = "scalar", type = "usize" },
+]
+# The kernel indexes with int (grid rows: the splits).
+requires = [
+  "out >= 1",
+  "rows * columns <= 2147483647",
+  "rows * out <= 2147483647",
+  "splits <= 65535",
+  "splits * blocks_per_split <= 2147483647",
+]
+probes = [
+  { rows = 1, columns = 2048, out = 40, accumulate = false, splits = 1, blocks_per_split = 64, partial_floats = 0, counter_count = 0 },
+  { rows = 22, columns = 1024, out = 33, accumulate = true, splits = 4, blocks_per_split = 8, partial_floats = 2904, counter_count = 3, with = ["partials", "counters"] },
+  { rows = 16, columns = 96, out = 17, accumulate = false, splits = 3, blocks_per_split = 1, partial_floats = 816, counter_count = 2, with = ["partials", "counters"] },
+  { rows = 32, columns = 64, out = 1, accumulate = false, splits = 2, blocks_per_split = 1, partial_floats = 64, counter_count = 1, with = ["partials", "counters"] },
+]
+
+[[launcher]]
+name = "wmma_bf16"
+cpp = "WmmaBf16Flat"
+returns = "supported"
+doc = "`wmma_q8` for bfloat16 tiles W (`WmmaBf16`)."
+params = [
+  { name = "x", kind = "in", elem = "bf16", len = "rows * columns" },
+  { name = "w", kind = "in", elem = "bf16", len = "(out + 15) / 16 * (columns / 32) * 512" },
+  { name = "y", kind = "inout", elem = "f32", len = "rows * out" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "columns", kind = "scalar", type = "usize" },
+  { name = "out", kind = "scalar", type = "usize" },
+  { name = "accumulate", kind = "scalar", type = "bool" },
+  { name = "splits", kind = "scalar", type = "usize" },
+  { name = "blocks_per_split", kind = "scalar", type = "usize" },
+  { name = "partials", kind = "inout", elem = "f32", len = "partial_floats", optional = true },
+  { name = "partial_floats", kind = "scalar", type = "usize" },
+  { name = "counters", kind = "inout", elem = "u32", len = "counter_count", optional = true },
+  { name = "counter_count", kind = "scalar", type = "usize" },
+]
+requires = [
+  "out >= 1",
+  "rows * columns <= 2147483647",
+  "rows * out <= 2147483647",
+  "splits <= 65535",
+  "splits * blocks_per_split <= 2147483647",
+]
+probes = [
+  { rows = 1, columns = 2048, out = 40, accumulate = false, splits = 1, blocks_per_split = 64, partial_floats = 0, counter_count = 0 },
+  { rows = 22, columns = 1024, out = 33, accumulate = true, splits = 4, blocks_per_split = 8, partial_floats = 2904, counter_count = 3, with = ["partials", "counters"] },
+  { rows = 16, columns = 96, out = 17, accumulate = false, splits = 3, blocks_per_split = 1, partial_floats = 816, counter_count = 2, with = ["partials", "counters"] },
+  { rows = 32, columns = 64, out = 1, accumulate = false, splits = 2, blocks_per_split = 1, partial_floats = 64, counter_count = 1, with = ["partials", "counters"] },
+]
+
+# --- Generator (generator_kernels.hpp) ---------------------------------------
+
+[[launcher]]
+name = "embed"
+cpp = "Embed"
+returns = "void"
+doc = "Rows with `text_mask[row]` take `table[ids[row]] * scale`; the others are zero (their IDs must still name a row)."
+params = [
+  { name = "table", kind = "in", elem = "bf16", len = "vocab * width" },
+  { name = "ids", kind = "indices", signed = true, len = "rows", below = "vocab" },
+  { name = "text_mask", kind = "in", elem = "i32", len = "rows" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+  { name = "vocab", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["vocab >= 1"]
+probes = [
+  { rows = 5, width = 2048, scale = 1.0, vocab = 7 },
+  { rows = 1, width = 3, scale = 12.0, vocab = 1 },
+  { rows = 0, width = 8, scale = 1.0, vocab = 1 },
+]
+
+[[launcher]]
+name = "scatter_rows"
+cpp = "ScatterRows"
+returns = "void"
+doc = "`output[indices[i]] = input[i]` for rows of `width` floats."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "indices", kind = "indices", signed = true, len = "rows", below = "output_rows" },
+  { name = "output", kind = "inout", elem = "f32", len = "output_rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "output_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["output_rows >= 1"]
+probes = [
+  { rows = 3, width = 2048, output_rows = 9 },
+  { rows = 1, width = 5, output_rows = 1 },
+  { rows = 0, width = 5, output_rows = 1 },
+]
+
+[[launcher]]
+name = "gather_rows"
+cpp = "GatherRows"
+returns = "void"
+doc = "`output[i] = input[indices[i]]` for rows of `width` floats."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "input_rows * width" },
+  { name = "indices", kind = "indices", signed = true, len = "rows", below = "input_rows" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "input_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["input_rows >= 1"]
+probes = [
+  { rows = 3, width = 1024, input_rows = 22 },
+  { rows = 1, width = 5, input_rows = 1 },
+  { rows = 0, width = 5, input_rows = 1 },
+]
+
+[[launcher]]
+name = "rms_norm"
+cpp = "RmsNorm"
+returns = "void"
+doc = "`output = bf16(weight * x * rsqrt(mean(x^2) + epsilon))` per row; with `output_f32`, also the float value."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "weight", kind = "in", elem = "bf16", len = "width" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * width" },
+  { name = "output_f32", kind = "out", elem = "f32", len = "rows * width", optional = true },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+  { name = "epsilon", kind = "scalar", type = "f32" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 3, width = 2048, epsilon = 1e-5 },
+  { rows = 1, width = 7, epsilon = 1e-5, with = ["output_f32"] },
+]
+
+[[launcher]]
+name = "qkv_rope"
+cpp = "QkvRope"
+returns = "void"
+doc = "Splits the fused projection `[q heads | k heads | v heads]` of each row, rotates q and k with the table's cos/sin row `positions[row]` (`[cos half | sin half]`; no rotation without a table), writes q as `[rows][heads][head_dim]` and k, v into the caches `[kv_heads][capacity][head_dim]` at `cache_rows[row]`."
+params = [
+  { name = "qkv", kind = "in", elem = "f32", len = "rows * (heads + 2 * kv_heads) * head_dim" },
+  { name = "cos_sin", kind = "in", elem = "f32", len = "table_rows * head_dim", optional = true },
+  { name = "positions", kind = "indices", signed = true, len = "rows", below = "table_rows" },
+  { name = "cache_rows", kind = "indices", signed = true, len = "rows", below = "capacity" },
+  { name = "q", kind = "out", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "inout", elem = "f32", len = "kv_heads * capacity * head_dim" },
+  { name = "v_cache", kind = "inout", elem = "f32", len = "kv_heads * capacity * head_dim" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "capacity", kind = "scalar", type = "usize" },
+  { name = "table_rows", kind = "scalar", type = "usize", contract_only = true },
+]
+requires = ["rows >= 1", "capacity >= 1", "table_rows >= 1"]
+probes = [
+  { rows = 3, heads = 16, kv_heads = 2, head_dim = 128, capacity = 9, table_rows = 9, with = ["cos_sin"] },
+  { rows = 22, heads = 16, kv_heads = 16, head_dim = 128, capacity = 22, table_rows = 11 },
+  { rows = 1, heads = 1, kv_heads = 1, head_dim = 6, capacity = 1, table_rows = 1, with = ["cos_sin"] },
+]
+
+[[launcher]]
+name = "attention"
+cpp = "Attention"
+returns = "void"
+doc = "Attention of each q row over the cached keys: row `r` belongs to sequence `r / rows_per_sequence`, whose keys start at cache row `sequence * keys_per_sequence`; it sees `past` earlier keys plus the sequence's rows up to itself (`causal`) or all of them. Writes bf16 `[rows][heads * head_dim]`; `head_dim` is 128."
+params = [
+  { name = "q", kind = "in", elem = "f32", len = "rows * heads * head_dim" },
+  { name = "k_cache", kind = "in", elem = "f32", len = "kv_heads * capacity * head_dim" },
+  { name = "v_cache", kind = "in", elem = "f32", len = "kv_heads * capacity * head_dim" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * heads * head_dim" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "rows_per_sequence", kind = "scalar", type = "usize" },
+  { name = "keys_per_sequence", kind = "scalar", type = "usize" },
+  { name = "past", kind = "scalar", type = "usize" },
+  { name = "causal", kind = "scalar", type = "bool" },
+  { name = "heads", kind = "scalar", type = "usize" },
+  { name = "kv_heads", kind = "scalar", type = "usize" },
+  { name = "head_dim", kind = "scalar", type = "usize" },
+  { name = "capacity", kind = "scalar", type = "usize" },
+]
+# The last sequence's keys end at `(sequences - 1) * keys_per_sequence +
+# past + rows_per_sequence`, inside the cache.
+requires = [
+  "head_dim == 128",
+  "rows >= 1",
+  "rows_per_sequence >= 1",
+  "kv_heads >= 1",
+  "heads % kv_heads == 0",
+  "((rows + rows_per_sequence - 1) / rows_per_sequence - 1) * keys_per_sequence + past + rows_per_sequence <= capacity",
+]
+probes = [
+  { rows = 5, rows_per_sequence = 5, keys_per_sequence = 0, past = 3, causal = true, heads = 16, kv_heads = 2, head_dim = 128, capacity = 9 },
+  { rows = 22, rows_per_sequence = 11, keys_per_sequence = 11, past = 0, causal = false, heads = 16, kv_heads = 16, head_dim = 128, capacity = 22 },
+  { rows = 1, rows_per_sequence = 1, keys_per_sequence = 0, past = 0, causal = true, heads = 2, kv_heads = 1, head_dim = 128, capacity = 1 },
+]
+
+[[launcher]]
+name = "swi_glu"
+cpp = "SwiGlu"
+returns = "void"
+doc = "`output[row][i] = bf16(silu(gate_up[row][i]) * gate_up[row][width + i])`."
+params = [
+  { name = "gate_up", kind = "in", elem = "f32", len = "rows * 2 * width" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["rows * width >= 1"]
+probes = [{ rows = 3, width = 6144 }, { rows = 1, width = 7 }]
+
+[[launcher]]
+name = "add_bias"
+cpp = "AddBias"
+returns = "void"
+doc = "`data[row][i] += bias[i]` for a bfloat16 bias."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "bias", kind = "in", elem = "bf16", len = "width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["rows * width >= 1"]
+probes = [{ rows = 3, width = 2048 }, { rows = 1, width = 7 }]
+
+[[launcher]]
+name = "to_bf16"
+cpp = "ToBf16"
+returns = "void"
+doc = "`output = bf16(input)`, optionally through silu."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "silu", kind = "scalar", type = "bool" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 2048, silu = false }, { count = 7, silu = true }]
+
+[[launcher]]
+name = "concat_rows"
+cpp = "ConcatRows"
+returns = "void"
+doc = "Writes bf16 rows `[a[row] * a_scale[row] | b[row] * b_scale[row]]` of widths `a_width + b_width`; absent scales are 1."
+params = [
+  { name = "a", kind = "in", elem = "f32", len = "rows * a_width" },
+  { name = "a_scale", kind = "in", elem = "f32", len = "rows", optional = true },
+  { name = "a_width", kind = "scalar", type = "usize" },
+  { name = "b", kind = "in", elem = "f32", len = "rows * b_width" },
+  { name = "b_scale", kind = "in", elem = "f32", len = "rows", optional = true },
+  { name = "b_width", kind = "scalar", type = "usize" },
+  { name = "output", kind = "out", elem = "bf16", len = "rows * (a_width + b_width)" },
+  { name = "rows", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1"]
+probes = [
+  { rows = 3, a_width = 2048, b_width = 2048 },
+  { rows = 1, a_width = 5, b_width = 3, with = ["a_scale", "b_scale"] },
+]
+
+[[launcher]]
+name = "quantize"
+cpp = "Quantize"
+returns = "void"
+doc = "Scalar quantization: `bf16(round(tanh(x) * scale) / scale)`, round half to even like torch.round."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "count" },
+  { name = "output", kind = "out", elem = "bf16", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "scale", kind = "scalar", type = "f32" },
+]
+requires = ["count >= 1"]
+probes = [{ count = 512, scale = 9.0 }, { count = 7, scale = 9.0 }]
+
+[[launcher]]
+name = "select_rows"
+cpp = "SelectRows"
+returns = "void"
+doc = "`output[row] = mask[row] ? quantized[row] : plain[row]` for rows of `width`."
+params = [
+  { name = "quantized", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "plain", kind = "in", elem = "f32", len = "rows * width" },
+  { name = "mask", kind = "in", elem = "i32", len = "rows" },
+  { name = "output", kind = "out", elem = "f32", len = "rows * width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["rows >= 1"]
+probes = [{ rows = 3, width = 2048 }, { rows = 1, width = 7 }]
+
+[[launcher]]
+name = "prepend_special"
+cpp = "PrependSpecial"
+returns = "void"
+doc = "The local encoder's input: per patch, row 0 is `special`, rows 1..P are `rows_in[patch * P + i]`."
+params = [
+  { name = "rows_in", kind = "in", elem = "f32", len = "patches * patch_size * width" },
+  { name = "special", kind = "in", elem = "bf16", len = "width" },
+  { name = "output", kind = "out", elem = "f32", len = "patches * (patch_size + 1) * width" },
+  { name = "patches", kind = "scalar", type = "usize" },
+  { name = "patch_size", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+requires = ["patches >= 1"]
+probes = [{ patches = 3, patch_size = 4, width = 1024 }, { patches = 1, patch_size = 1, width = 3 }]
+
+[[launcher]]
+name = "assemble_dit"
+cpp = "AssembleDit"
+returns = "void"
+doc = "The DiT input of the CFG pair of sequences of length `3 + 2P`: `[mu_a, mu_b, time, cond rows, x rows]`; the conditional sequence takes `mu` (`2 * width`), the unconditional one zeros."
+params = [
+  { name = "mu", kind = "in", elem = "f32", len = "2 * width" },
+  { name = "time", kind = "in", elem = "f32", len = "width" },
+  { name = "cond", kind = "in", elem = "f32", len = "patch_size * width" },
+  { name = "x", kind = "in", elem = "f32", len = "patch_size * width" },
+  { name = "output", kind = "out", elem = "f32", len = "2 * (3 + 2 * patch_size) * width" },
+  { name = "patch_size", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [{ patch_size = 4, width = 1024 }, { patch_size = 1, width = 3 }]
+
+[[launcher]]
+name = "guided_euler"
+cpp = "GuidedEuler"
+returns = "void"
+doc = "CFG-Zero* guidance and the Euler step on one patch: with the conditional and unconditional velocities c, u (`velocity` rows `[2][count]`), `s = <c, u> / (|u|^2 + 1e-8)`, `v = u * s + cfg * (c - u * s)`, `x -= dt * v`."
+params = [
+  { name = "velocity", kind = "in", elem = "f32", len = "2 * count" },
+  { name = "x", kind = "inout", elem = "f32", len = "count" },
+  { name = "count", kind = "scalar", type = "usize" },
+  { name = "cfg", kind = "scalar", type = "f32" },
+  { name = "dt", kind = "scalar", type = "f32" },
+]
+probes = [{ count = 256, cfg = 2.0, dt = 0.1 }, { count = 1, cfg = 2.0, dt = 0.1 }]
+
+# --- AudioVAE V2 (vae_kernels.hpp) -------------------------------------------
+# Time-major `[frames][channels]`; a causal convolution reads its history
+# frames before the first output frame.
+
+[[launcher]]
+name = "snake"
+cpp = "Snake"
+returns = "void"
+doc = "`output = x + sin(alpha * x)^2 / (alpha + 1e-9)` per channel."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "frames * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * channels" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "alpha", kind = "in", elem = "f32", len = "channels" },
+  { name = "scale", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "bias", kind = "const", cpp_type = "const float*", value = "nullptr" },
+]
+probes = [{ frames = 10, channels = 2048 }, { frames = 1, channels = 3 }, { frames = 0, channels = 3 }]
+
+[[launcher]]
+name = "snake_in_place"
+cpp = "Snake"
+returns = "void"
+doc = "`snake` on `data` in place."
+params = [
+  { name = "input", kind = "alias", of = "data", elem = "f32", read_only = true },
+  { name = "data", kind = "inout", elem = "f32", len = "frames * channels" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "alpha", kind = "in", elem = "f32", len = "channels" },
+  { name = "scale", kind = "const", cpp_type = "const float*", value = "nullptr" },
+  { name = "bias", kind = "const", cpp_type = "const float*", value = "nullptr" },
+]
+probes = [{ frames = 10, channels = 2048 }, { frames = 1, channels = 3 }]
+
+[[launcher]]
+name = "snake_affine"
+cpp = "Snake"
+returns = "void"
+doc = "`snake` of `y = input * scale + bias` (per channel), the rate-conditioned input of a decoder block."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "frames * channels" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * channels" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "alpha", kind = "in", elem = "f32", len = "channels" },
+  { name = "scale", kind = "in", elem = "f32", len = "channels" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+]
+probes = [{ frames = 10, channels = 2048 }, { frames = 1, channels = 3 }]
+
+[[launcher]]
+name = "depthwise_conv"
+cpp = "DepthwiseConv"
+returns = "void"
+doc = "Depthwise causal convolution: `output[t][c] = bias[c] + sum_j weight[c][j] * input[t + j * dilation][c]`, where `input` holds `(kernel - 1) * dilation` history frames before the `frames` new ones."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "(frames + (kernel - 1) * dilation) * channels" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * channels" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+  { name = "dilation", kind = "scalar", type = "usize" },
+]
+requires = ["kernel >= 1"]
+probes = [
+  { frames = 10, channels = 256, kernel = 7, dilation = 9 },
+  { frames = 1, channels = 3, kernel = 7, dilation = 1 },
+  { frames = 0, channels = 3, kernel = 1, dilation = 1 },
+]
+
+[[launcher]]
+name = "conv_from_mono"
+cpp = "ConvFromMono"
+returns = "void"
+doc = "One input channel to `channels`: `output[t][c] = bias[c] + sum_j weight[c][j] * samples[t + j]` (`kernel - 1` history samples)."
+params = [
+  { name = "samples", kind = "in", elem = "f32", len = "frames + kernel - 1" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "in", elem = "f32", len = "channels" },
+  { name = "output", kind = "out", elem = "f32", len = "frames * channels" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+requires = ["kernel >= 1"]
+probes = [{ frames = 100, channels = 128, kernel = 7 }, { frames = 1, channels = 1, kernel = 1 }]
+
+[[launcher]]
+name = "conv_to_mono"
+cpp = "ConvToMono"
+returns = "void"
+doc = "`channels` to one output channel through tanh: `output[t] = tanh(bias + sum_c sum_j weight[c][j] * input[t + j][c])`."
+params = [
+  { name = "input", kind = "in", elem = "f32", len = "(frames + kernel - 1) * channels" },
+  { name = "weight", kind = "in", elem = "f32", len = "channels * kernel" },
+  { name = "bias", kind = "scalar", type = "f32" },
+  { name = "output", kind = "out", elem = "f32", len = "frames" },
+  { name = "frames", kind = "scalar", type = "usize" },
+  { name = "channels", kind = "scalar", type = "usize" },
+  { name = "kernel", kind = "scalar", type = "usize" },
+]
+requires = ["kernel >= 1"]
+probes = [{ frames = 10, channels = 32, kernel = 7, bias = 0.5 }, { frames = 1, channels = 1, kernel = 1, bias = 0.5 }]
+
+[[launcher]]
+name = "add_bias_f32"
+cpp = "AddBiasF32"
+returns = "void"
+doc = "`data[row][i] += bias[i]`."
+params = [
+  { name = "data", kind = "inout", elem = "f32", len = "rows * width" },
+  { name = "bias", kind = "in", elem = "f32", len = "width" },
+  { name = "rows", kind = "scalar", type = "usize" },
+  { name = "width", kind = "scalar", type = "usize" },
+]
+probes = [{ rows = 10, width = 2048 }, { rows = 1, width = 3 }, { rows = 0, width = 3 }]

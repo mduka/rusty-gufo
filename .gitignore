@@ -51,4 +51,4 @@ pytorch_model*.bin
 
 # Test fixtures stay trackable whatever their suffix.
 !fixtures/
-!fixtures/**
+!**/fixtures/**

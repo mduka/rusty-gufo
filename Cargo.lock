@@ -331,6 +331,7 @@ dependencies = [
  "gufo-qwen35moe",
  "gufo-qwen38-flash-next",
  "gufo-serve",
+ "gufo-voxcpm",
  "rustix",
  "serde_json",
  "sha2",
@@ -664,6 +665,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gufo-resample"
+version = "0.1.0"
+
+[[package]]
 name = "gufo-serve"
 version = "0.1.0"
 dependencies = [
@@ -676,6 +681,26 @@ dependencies = [
  "tempfile",
  "toml",
  "ureq",
+]
+
+[[package]]
+name = "gufo-voxcpm"
+version = "0.1.0"
+dependencies = [
+ "gufo-core",
+ "gufo-formats",
+ "gufo-hip",
+ "gufo-kernel-build",
+ "gufo-resample",
+ "gufo-voxcpm-kernels",
+]
+
+[[package]]
+name = "gufo-voxcpm-kernels"
+version = "0.1.0"
+dependencies = [
+ "gufo-hip",
+ "gufo-kernel-build",
 ]
 
 [[package]]

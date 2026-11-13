@@ -1,0 +1,18 @@
+[package]
+name = "gufo-resample"
+version = "0.1.0"
+description = "One-shot resampling with the response of soxr's HQ preset (Gufo 0.34.0's src/core/resample, verbatim)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The workspace lints, and an allowance: the source stays byte-identical to
+# Gufo 0.34.0's, whose clippy predates `chunks_exact_to_as_chunks`.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+chunks_exact_to_as_chunks = "allow"

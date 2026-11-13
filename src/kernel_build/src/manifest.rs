@@ -32,6 +32,9 @@ pub struct Library {
     /// C++ element type of `f16` buffers (default `void`, for launchers that
     /// take `void*`; for example `__half`).
     pub f16_type: Option<String>,
+    /// C++ element type of `bf16` buffers (default `void`; for example
+    /// `std::uint16_t` for kernels that take raw bfloat16 bits).
+    pub bf16_type: Option<String>,
 }
 
 #[derive(Deserialize, Hash, Clone)]

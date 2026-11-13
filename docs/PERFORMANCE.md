@@ -3,8 +3,8 @@
 Current speed of rusty-gufo on an AMD Ryzen AI MAX+ 395 with the Radeon
 8060S (`gfx1151`), 128 GiB of memory, ROCm 10.1 and the Balanced power
 profile, measured on an otherwise idle machine: release 0.1.0, and for the
-dense Qwen3.5 the main branch after it (its faster prefill attention is in
-the [changelog](../CHANGELOG.md)). How the numbers are taken is in
+dense Qwen3.5 and VoxCPM2 the main branch after it (Qwen3.5's faster
+prefill attention and VoxCPM2 are in the [changelog](../CHANGELOG.md)). How the numbers are taken is in
 [benchmarking](development/BENCHMARKING.md); how they compare with Gufo's
 C++ build in [relation to Gufo](development/PARITY.md#performance-against-gufo).
 
@@ -132,6 +132,19 @@ confidence and a warm, resonant tone.":
 The same sentence, streamed, seed 42, `max_new_tokens` 64 (2.76 s of audio): the
 whole utterance in 0.79 s, 0.29 s per second of audio. The audio arrives
 when it is complete; the 0.1 s of silence that opens it is sent at once.
+
+## VoxCPM2
+
+The same sentence, streamed, seed 42, automatic voice (7.36 s of audio at
+48 kHz):
+
+| Files | First audio | Whole utterance | Per second of audio |
+| --- | --- | --- | --- |
+| Hugging Face directory (bfloat16) | 84 ms | 2.25 s | 0.31 s |
+| `voxcpm2-q8_0.gguf` | 45 ms | 1.42 s | 0.19 s |
+
+The extension's C++ build is as fast
+([checks](development/models/voxcpm2/CHECKS.md)).
 
 ## EmbeddingGemma 2
 

@@ -113,8 +113,8 @@ are set at build time.
   numerical contracts live in its package, and no model calls another
   model's kernels.
 - **Comments that cite a C++ file or function** mean the reference's tree:
-  Gufo v0.28.1, or for the Gemma 4, Nemotron and OmniVoice packages the
-  extension commit their crate documentation names. Kernel sources taken
+  Gufo v0.28.1, or for the Qwen3.6 35B-A3B, Gemma 4, Nemotron, OmniVoice and
+  VoxCPM2 packages the extension commit their crate documentation names. Kernel sources taken
   from there keep their comments.
 
 Style: Rust follows `rustfmt` and the workspace lints; HIP and C++ follow

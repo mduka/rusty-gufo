@@ -6,11 +6,15 @@ use std::fmt::Write as _;
 use crate::extent::{Expr, Relation};
 use crate::manifest::{Elem, Kind, Launcher, Manifest, Param, Returns, Scalar};
 
-/// The parameter's type in the C++ launcher signature; `f16` buffers use
-/// the library's `f16_type` (default `void`).
-fn cpp_param_type(p: &Param, format_type: &str, f16_type: &str) -> String {
+/// The parameter's type in the C++ launcher signature; `f16` and `bf16`
+/// buffers use the library's `f16_type` and `bf16_type` (default `void`).
+fn cpp_param_type(p: &Param, format_type: &str, f16_type: &str, bf16_type: &str) -> String {
     let list = p.list.is_some();
-    let elem = |e: Elem| if e == Elem::F16 { f16_type } else { e.cpp() };
+    let elem = |e: Elem| match e {
+        Elem::F16 => f16_type,
+        Elem::Bf16 => bf16_type,
+        _ => e.cpp(),
+    };
     let index = if p.signed {
         "std::int32_t"
     } else {
@@ -89,10 +93,11 @@ pub fn cpp_shim(m: &Manifest) -> String {
         };
         let format_type = m.library.format_type.as_deref().unwrap_or_default();
         let f16_type = m.library.f16_type.as_deref().unwrap_or("void");
+        let bf16_type = m.library.bf16_type.as_deref().unwrap_or("void");
         let passed: Vec<&Param> = l.params.iter().filter(|p| !p.contract_only).collect();
         let types: Vec<String> = passed
             .iter()
-            .map(|p| cpp_param_type(p, format_type, f16_type))
+            .map(|p| cpp_param_type(p, format_type, f16_type, bf16_type))
             .collect();
         let explicit_stream = passed.iter().any(|p| p.kind == Kind::Stream);
         let signature = if explicit_stream {
@@ -1667,6 +1672,34 @@ mod tests {
                 .unwrap()
                 .contains("another quant parameter")
         );
+    }
+
+    #[test]
+    fn half_and_bfloat16_buffers_take_the_library_element_types() {
+        let text = r#"
+            [library]
+            name = "demo"
+            root = "."
+            namespace = "ns"
+            f16_type = "std::uint16_t"
+            bf16_type = "std::uint16_t"
+            headers = []
+            [[launcher]]
+            name = "convert"
+            cpp = "Convert"
+            returns = "void"
+            params = [
+              { name = "half", kind = "in", elem = "f16", len = "count" },
+              { name = "output", kind = "out", elem = "bf16", len = "count" },
+              { name = "count", kind = "scalar", type = "usize" },
+            ]
+            probes = [{ count = 3 }]
+        "#;
+        let cpp = cpp_shim(&Manifest::parse(text).unwrap());
+        assert!(cpp.contains("const std::uint16_t*, std::uint16_t*, std::size_t, hipStream_t"));
+        let default = text.replace("bf16_type = \"std::uint16_t\"\n", "");
+        let cpp = cpp_shim(&Manifest::parse(&default).unwrap());
+        assert!(cpp.contains("const std::uint16_t*, void*, std::size_t, hipStream_t"));
     }
 
     #[test]

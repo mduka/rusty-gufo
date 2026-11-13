@@ -16,6 +16,7 @@ and mind their licenses.
 | Qwen3-ASR 1.7B | BF16 safetensors | Audio → text | [Qwen3-ASR](qwen3-asr/README.md) |
 | Qwen3-TTS 12Hz 1.7B | BF16 safetensors (CustomVoice, VoiceDesign, Base) | Text, reference audio → speech | [Qwen3-TTS](qwen3-tts/README.md) |
 | OmniVoice | float32 safetensors | Text, reference audio → speech in 646 languages | [OmniVoice](omnivoice/README.md) |
+| VoxCPM2 | BF16 safetensors, or audio.cpp's BF16/Q8_0 GGUF | Text, reference audio → speech in 30 languages | [VoxCPM2](voxcpm2/README.md) |
 | EmbeddingGemma 2 | BF16 safetensors | Text, images, video, audio → embeddings | [EmbeddingGemma 2](embeddinggemma-2/README.md) |
 | Qwen-Image-2.1 | BF16 safetensors | Text, images → images | [Qwen-Image-2.1](qwen-image-2.1/README.md) |
 

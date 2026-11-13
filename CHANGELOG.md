@@ -5,6 +5,11 @@ Notable user-facing changes are recorded here. Versions follow
 
 ## Unreleased
 
+* VoxCPM2 (OpenBMB) text-to-speech in 30 languages through `gufo serve
+  tts`, from the VoxCPM extension for Gufo: an automatic voice, voice design
+  and style from `instructions`, and cloning with or without a transcript;
+  from the Hugging Face directory or one of audio.cpp's GGUFs (BF16, Q8_0
+  kept 8-bit on the GPU), 48 kHz output streamed patch by patch.
 * The dense Qwen3.5 models prefill their attention on the matrix cores (the
   Qwen3.8 27B's WMMA kernel): long prompts many times faster; logits no
   longer bit-identical to Gufo's, the same tokens on the checked prompts but

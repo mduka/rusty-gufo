@@ -1,0 +1,30 @@
+[package]
+name = "gufo-voxcpm"
+version = "0.1.0"
+description = "VoxCPM2 text-to-speech (OpenBMB) on gfx1151"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+# The kernels and reference tools of this model share the directory.
+include = ["Cargo.toml", "build.rs", "src/**/*.rs", "tests/*.rs"]
+
+[features]
+# Tests that need a gfx1151 device: cargo test -p gufo-voxcpm --features gpu
+gpu = []
+# Tests that need the model files (GUFO_VOXCPM_MODEL, GUFO_VOXCPM_GGUF):
+# --features gpu,models
+models = []
+
+[dependencies]
+gufo-core.workspace = true
+gufo-formats.workspace = true
+gufo-hip.workspace = true
+gufo-resample.workspace = true
+gufo-voxcpm-kernels = { path = "kernels" }
+
+[build-dependencies]
+gufo-kernel-build.workspace = true
+
+[lints]
+workspace = true
